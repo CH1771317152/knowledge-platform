@@ -55,6 +55,8 @@ platform:
     id:
       worker-id: ${CONTENT_ID_WORKER_ID:1}
       datacenter-id: ${CONTENT_ID_DATACENTER_ID:1}
+    kafka:
+      events-topic: ${CONTENT_EVENTS_TOPIC:content-events}
   cache:
     caffeine:
       maximum-size: ${LOCAL_CACHE_MAXIMUM_SIZE:10000}
@@ -83,3 +85,19 @@ platform:
       follower-dlq-topic: ${RELATION_FOLLOWER_DLQ_TOPIC:relation-follower-dlq}
       follower-consumer-group: ${RELATION_FOLLOWER_CONSUMER_GROUP:relation-follower-projector-group}
       follower-retry-consumer-group: ${RELATION_FOLLOWER_RETRY_CONSUMER_GROUP:relation-follower-retry-group}
+  counter:
+    kafka:
+      events-topic: ${COUNTER_EVENTS_TOPIC:counter-events}
+      retry-topic: ${COUNTER_RETRY_TOPIC:counter-retry}
+      dlq-topic: ${COUNTER_DLQ_TOPIC:counter-dlq}
+      consumer-group: ${COUNTER_CONSUMER_GROUP:counter-aggregate-group}
+      retry-consumer-group: ${COUNTER_RETRY_CONSUMER_GROUP:counter-aggregate-retry-group}
+      relation-consumer-group: ${COUNTER_RELATION_CONSUMER_GROUP:counter-relation-group}
+      content-events-topic: ${CONTENT_EVENTS_TOPIC:content-events}
+      content-consumer-group: ${COUNTER_CONTENT_CONSUMER_GROUP:counter-content-group}
+    flush:
+      mode: ${COUNTER_FLUSH_MODE:adaptive}
+      fixed-interval-ms: ${COUNTER_FLUSH_FIXED_MS:1000}
+      min-interval-ms: ${COUNTER_FLUSH_MIN_MS:500}
+      max-interval-ms: ${COUNTER_FLUSH_MAX_MS:5000}
+      batch-size: ${COUNTER_FLUSH_BATCH:1000}

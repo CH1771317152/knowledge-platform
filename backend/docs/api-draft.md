@@ -36,12 +36,13 @@ GET    /api/posts/me
 ## Counter
 
 ```text
-POST   /api/posts/{postId}/likes
-DELETE /api/posts/{postId}/likes
-POST   /api/posts/{postId}/favorites
-DELETE /api/posts/{postId}/favorites
-POST   /api/posts/{postId}/views
-GET    /api/posts/{postId}/counters
+POST   /api/posts/{postId}/likes            (认证) 当前用户点赞，位图门控，返回 changed
+DELETE /api/posts/{postId}/likes            (认证) 取消点赞，位图门控，返回 changed
+POST   /api/posts/{postId}/favorites        (认证) 收藏，位图门控，返回 changed
+DELETE /api/posts/{postId}/favorites        (认证) 取消收藏，位图门控，返回 changed
+POST   /api/posts/{postId}/views            (认证) 浏览，必须带 Idempotency-Key 头
+GET    /api/posts/{postId}/counters         (公开) 文章五项计数 like/fav/view/comment/share
+GET    /api/posts/{postId}/counters/liked   (认证) 当前用户是否点赞（读位图）
 ```
 
 ## Relation

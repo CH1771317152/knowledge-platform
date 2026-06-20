@@ -58,6 +58,14 @@ public class SecurityConfig {
                                 .authenticated()
                         .requestMatchers(HttpMethod.GET, "/api/posts", "/api/posts/{postId}")
                                 .permitAll()
+                        // Counter reads: the public per-post counters (like/fav/view/comment/share) are
+                        // publicly readable (anonymous can see counts). This is a distinct 2-segment path
+                        // — the single-segment /api/posts/{postId} matcher above does NOT match it. The
+                        // authenticated counterpart GET /api/posts/{postId}/counters/liked (3 segments,
+                        // reveals the requester's own like state) is deliberately NOT here and falls
+                        // through to anyRequest().authenticated(); so do all interaction writes
+                        // (POST/DELETE likes/favorites, POST views). No existing matcher removed/reordered.
+                        .requestMatchers(HttpMethod.GET, "/api/posts/{postId}/counters").permitAll()
                         // Relation reads: the following/followers lists are publicly readable
                         // (conventional social UX). The current user's follow state
                         // (GET /api/users/{userId}/relation) is deliberately NOT here — it reveals

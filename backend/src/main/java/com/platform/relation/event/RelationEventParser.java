@@ -8,7 +8,9 @@ import com.platform.common.exception.PlatformException;
 /**
  * Shared Canal-flat-message parser for the relation follower consumers. Both
  * {@link RelationFollowerProjectorConsumer} and {@link RelationFollowerRetryConsumer} use this so the
- * parse logic is defined exactly once.
+ * parse logic is defined exactly once. The counter module's {@code RelationCountConsumer} also
+ * reuses this to parse the same {@code relation_outbox} Canal messages (DRY — counter does not
+ * duplicate the Canal unwrap), which is why this class and {@link #parse} are public.
  *
  * <p>Semantics:
  * <ul>
@@ -20,7 +22,7 @@ import com.platform.common.exception.PlatformException;
  *       to retry / DLQ and acks).</li>
  * </ul>
  */
-final class RelationEventParser {
+public final class RelationEventParser {
 
     static final String OUTBOX_TABLE = "relation_outbox";
     static final String INSERT_TYPE = "INSERT";
@@ -35,7 +37,7 @@ final class RelationEventParser {
      * @throws PlatformException with {@link ErrorCode#RELATION_EVENT_INVALID} on a malformed or
      *         missing payload (route to retry / DLQ).
      */
-    static RelationEventPayload parse(ObjectMapper objectMapper, String value) {
+    public static RelationEventPayload parse(ObjectMapper objectMapper, String value) {
         CanalFlatMessage message;
         try {
             message = objectMapper.readValue(value, CanalFlatMessage.class);

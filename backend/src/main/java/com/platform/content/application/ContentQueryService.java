@@ -18,6 +18,7 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.nio.charset.StandardCharsets;
 import java.util.List;
+import java.util.Optional;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.context.annotation.Profile;
@@ -131,6 +132,24 @@ public class ContentQueryService {
                 .toList();
 
         return new PostDetailResponse(summary, bodyText, bodyObjectKey, bodySha256, files);
+    }
+
+    /**
+     * Lightweight internal lookup of a post's author id by id, with no permission gating. Used by
+     * cross-module callers (e.g. the counter module's like/fav fan-out) that need only the author
+     * and the post's existence — not its body or visibility. A soft-deleted ({@link PostStatus#DELETED})
+     * post is reported as absent so callers treat it as "not found".
+     *
+     * <p>Unlike {@link #getPostDetail} / {@link #getPublishingState} this does NOT enforce read
+     * permission or author ownership: the interaction endpoints (like/fav/view) are open to any
+     * authenticated user regardless of a post's visibility, and the author id is only used to route
+     * the {@code LIKES_RECEIVED}/{@code FAVS_RECEIVED} fan-out event.
+     */
+    @Transactional(readOnly = true)
+    public Optional<Long> findPostAuthorId(Long postId) {
+        return repository.findPostById(postId)
+                .filter(post -> post.status() != PostStatus.DELETED)
+                .map(ContentPost::authorId);
     }
 
     /**

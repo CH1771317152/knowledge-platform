@@ -15,6 +15,7 @@ import com.platform.content.dto.CreateDraftRequest;
 import com.platform.content.dto.PostFileRequest;
 import com.platform.content.dto.PostPublishingStateResponse;
 import com.platform.content.dto.UpdatePostMetadataRequest;
+import com.platform.content.event.PostPublishedEvent;
 import com.platform.content.infrastructure.id.ContentIdGenerator;
 import com.platform.content.repository.ContentPostRepository;
 import com.platform.storage.application.ObjectStorageService;
@@ -30,6 +31,8 @@ import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
+import java.util.UUID;
+import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.context.annotation.Profile;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -80,13 +83,16 @@ public class ContentCommandService {
     private final ContentPostRepository repository;
     private final ContentIdGenerator contentIdGenerator;
     private final ObjectStorageService objectStorageService;
+    private final ApplicationEventPublisher applicationEventPublisher;
 
     public ContentCommandService(ContentPostRepository repository,
                                  ContentIdGenerator contentIdGenerator,
-                                 ObjectStorageService objectStorageService) {
+                                 ObjectStorageService objectStorageService,
+                                 ApplicationEventPublisher applicationEventPublisher) {
         this.repository = repository;
         this.contentIdGenerator = contentIdGenerator;
         this.objectStorageService = objectStorageService;
+        this.applicationEventPublisher = applicationEventPublisher;
     }
 
     // --- stage 1: create draft ------------------------------------------------
@@ -311,6 +317,13 @@ public class ContentCommandService {
      * Publishes the post (idempotent). Requires the workflow to have reached
      * {@link PublishStage#METADATA_COMPLETED}. {@code publishedAt} is set only on the first publish
      * and preserved across any future re-publish.
+     *
+     * <p>On the actual first-publish transition ({@code publishedAt} was null → now PUBLISHED), emits
+     * a {@link PostPublishedEvent} via the in-process {@link ApplicationEventPublisher}. A
+     * {@code @TransactionalEventListener(AFTER_COMMIT)} Kafka publisher in the {@code event} package
+     * then forwards it to the {@code content-events} Kafka topic so the counter module can increment
+     * the author's {@code posts_count}. The event is NOT emitted on an idempotent re-publish of an
+     * already-published post.
      */
     @Transactional
     public PostPublishingStateResponse publish(Long authorId, Long postId) {
@@ -318,7 +331,7 @@ public class ContentCommandService {
         repository.findBodyByPostId(postId).orElseThrow(() -> notFound(postId));
 
         if (post.status() == PostStatus.PUBLISHED) {
-            // Idempotent: no timestamp update, no side effects.
+            // Idempotent: no timestamp update, no side effects, no event.
             return PublishingStateBuilder.build(post, repository.findBodyByPostId(postId));
         }
 
@@ -327,12 +340,20 @@ public class ContentCommandService {
                     "Post is not ready to publish: metadata must be completed first");
         }
 
-        LocalDateTime publishedAt = post.publishedAt() == null
+        boolean firstPublish = post.publishedAt() == null;
+        LocalDateTime publishedAt = firstPublish
                 ? LocalDateTime.now()
                 : post.publishedAt();
         repository.updateStatusAndStage(postId, PostStatus.PUBLISHED, PublishStage.PUBLISHED, publishedAt);
 
-        // TODO(Task 8+): emit PostPublishedEvent / write outbox row here once the event bus exists.
+        if (firstPublish) {
+            // In-process event; the Kafka publisher (gated by @Profile) forwards it after commit.
+            applicationEventPublisher.publishEvent(new PostPublishedEvent(
+                    UUID.randomUUID().toString(),
+                    postId,
+                    post.authorId(),
+                    LocalDateTime.now()));
+        }
 
         return PublishingStateBuilder.build(refetch(postId), repository.findBodyByPostId(postId));
     }

@@ -20,6 +20,7 @@ import com.platform.content.dto.CreateDraftRequest;
 import com.platform.content.dto.PostFileRequest;
 import com.platform.content.dto.PostPublishingStateResponse;
 import com.platform.content.dto.UpdatePostMetadataRequest;
+import com.platform.content.event.PostPublishedEvent;
 import com.platform.content.infrastructure.id.ContentIdGenerator;
 import com.platform.content.repository.ContentPostRepository;
 import com.platform.storage.infrastructure.FakeObjectStorageService;
@@ -35,6 +36,7 @@ import java.util.Map;
 import java.util.Optional;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.springframework.context.ApplicationEventPublisher;
 
 /**
  * Pure unit test for {@link ContentCommandService}. The service is constructed directly with an
@@ -52,6 +54,7 @@ class ContentCommandServiceTest {
     private FakeContentPostRepository repository;
     private SequenceContentIdGenerator idGenerator;
     private FakeObjectStorageService objectStorage;
+    private RecordingEventPublisher eventPublisher;
     private ContentCommandService service;
 
     @BeforeEach
@@ -59,7 +62,8 @@ class ContentCommandServiceTest {
         repository = new FakeContentPostRepository();
         idGenerator = new SequenceContentIdGenerator();
         objectStorage = new FakeObjectStorageService();
-        service = new ContentCommandService(repository, idGenerator, objectStorage);
+        eventPublisher = new RecordingEventPublisher();
+        service = new ContentCommandService(repository, idGenerator, objectStorage, eventPublisher);
     }
 
     // --- createDraft ----------------------------------------------------------
@@ -538,6 +542,27 @@ class ContentCommandServiceTest {
                 .matches(ex -> ((PlatformException) ex).errorCode() == ErrorCode.CONTENT_FORBIDDEN);
     }
 
+    @Test
+    void publishEmitsPostPublishedEventOnFirstPublish() {
+        Long postId = fullyPreparedPost(AUTHOR);
+
+        service.publish(AUTHOR, postId);
+
+        // Exactly one PostPublishedEvent on the real first-publish transition.
+        assertThat(eventPublisher.published).hasSize(1);
+        Object only = eventPublisher.published.get(0);
+        assertThat(only).isInstanceOf(PostPublishedEvent.class);
+        PostPublishedEvent event = (PostPublishedEvent) only;
+        assertThat(event.postId()).isEqualTo(postId);
+        assertThat(event.authorId()).isEqualTo(AUTHOR);
+        assertThat(event.eventId()).isNotBlank();
+        assertThat(event.occurredAt()).isNotNull();
+
+        // Idempotent re-publish MUST NOT emit a second event.
+        service.publish(AUTHOR, postId);
+        assertThat(eventPublisher.published).hasSize(1);
+    }
+
     // --- shared fixtures ------------------------------------------------------
 
     /** Creates a draft and requests the body upload URL, leaving the post at BODY_URL_ISSUED. */
@@ -588,6 +613,20 @@ class ContentCommandServiceTest {
             long id = next++;
             issued.add(id);
             return id;
+        }
+    }
+
+    /**
+     * Recording {@link ApplicationEventPublisher} that collects every published event into a list,
+     * so tests can assert on what the service emitted. Stands in for the real Spring publisher +
+     * the {@code @TransactionalEventListener} Kafka publisher (which is gated out of tests).
+     */
+    private static final class RecordingEventPublisher implements ApplicationEventPublisher {
+        final List<Object> published = new ArrayList<>();
+
+        @Override
+        public void publishEvent(Object event) {
+            published.add(event);
         }
     }
 

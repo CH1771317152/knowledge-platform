@@ -10,6 +10,7 @@
 | auth | [auth.md](auth.md) | 身份认证、登录态管理、双 Token、验证码 |
 | content | [content.md](content.md) | 贴文六阶段发布、正文 OSS 存储、Storage presign |
 | relation | [relation.md](relation.md) | 关注/取关、following/followers 列表、关系事件 outbox + Canal + Kafka + 粉丝投影 |
+| counter | [counter.md](counter.md) | 文章点赞/收藏/浏览计数、用户关注/粉丝/作品计数、位图事实层 + Redis 聚合 + 跨模块事件消费 |
 
 ## 模块文档列表
 
@@ -17,6 +18,7 @@
 - [Auth 模块](auth.md)
 - [Content 模块](content.md)
 - [Relation 模块](relation.md)
+- [Counter 模块](counter.md)
 
 ## 文档约定
 
