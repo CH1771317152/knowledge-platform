@@ -1,0 +1,31 @@
+# build output
+target/
+
+# IDE
+.idea/
+.vscode/
+*.iml
+
+# OS / editor noise
+*.log
+.DS_Store
+
+# frontend (future)
+node_modules/
+dist/
+
+# secrets / local env
+.env
+.env.*
+*.local.yml
+*.local.properties
+
+# local scratch & throwaway scripts
+tmp/
+backend/tmp/
+
+# canal runtime logs (server output)
+deploy/canal/logs/
+
+# claude local override (shared settings.json is committed)
+.claude/settings.local.json

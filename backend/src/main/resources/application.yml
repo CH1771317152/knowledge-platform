@@ -1,0 +1,85 @@
+server:
+  port: 8080
+
+spring:
+  application:
+    name: knowledge-platform
+  profiles:
+    active: local
+  datasource:
+    driver-class-name: com.mysql.cj.jdbc.Driver
+    url: ${MYSQL_URL:jdbc:mysql://localhost:3307/knowledge_platform?useUnicode=true&characterEncoding=utf8&serverTimezone=Asia/Shanghai&allowPublicKeyRetrieval=true}
+    username: ${MYSQL_USERNAME:root}
+    password: ${MYSQL_PASSWORD:root}
+  data:
+    redis:
+      host: ${REDIS_HOST:localhost}
+      port: ${REDIS_PORT:6379}
+      database: ${REDIS_DATABASE:0}
+  kafka:
+    bootstrap-servers: ${KAFKA_BOOTSTRAP_SERVERS:localhost:9092}
+    consumer:
+      group-id: knowledge-platform
+      auto-offset-reset: earliest
+      enable-auto-commit: false
+      key-deserializer: org.apache.kafka.common.serialization.StringDeserializer
+      value-deserializer: org.apache.kafka.common.serialization.StringDeserializer
+    producer:
+      key-serializer: org.apache.kafka.common.serialization.StringSerializer
+      value-serializer: org.apache.kafka.common.serialization.StringSerializer
+  servlet:
+    multipart:
+      max-file-size: 100MB
+      max-request-size: 100MB
+  flyway:
+    enabled: true
+    locations: classpath:db/migration
+    baseline-on-migrate: true
+    baseline-version: 0
+    clean-disabled: true
+
+mybatis:
+  mapper-locations: classpath*:mapper/**/*.xml
+  type-aliases-package: com.platform
+
+platform:
+  storage:
+    provider: ${STORAGE_PROVIDER:aliyun-oss}
+    endpoint: ${OSS_ENDPOINT:https://oss-cn-hangzhou.aliyuncs.com}
+    region: ${OSS_REGION:cn-hangzhou}
+    bucket: ${OSS_BUCKET:knowledge-platform-dev-2026}
+    access-key-id: ${OSS_ACCESS_KEY_ID:}
+    access-key-secret: ${OSS_ACCESS_KEY_SECRET:}
+    presign-expire-minutes: ${OSS_PRESIGN_EXPIRE_MINUTES:10}
+  content:
+    id:
+      worker-id: ${CONTENT_ID_WORKER_ID:1}
+      datacenter-id: ${CONTENT_ID_DATACENTER_ID:1}
+  cache:
+    caffeine:
+      maximum-size: ${LOCAL_CACHE_MAXIMUM_SIZE:10000}
+      expire-after-write-seconds: ${LOCAL_CACHE_EXPIRE_SECONDS:300}
+  auth:
+    jwt:
+      issuer: ${AUTH_JWT_ISSUER:knowledge-platform}
+      secret: ${AUTH_JWT_SECRET:change-this-development-secret-change-this}
+      access-token-ttl-seconds: ${AUTH_ACCESS_TOKEN_TTL_SECONDS:900}
+    refresh-token:
+      ttl-seconds: ${AUTH_REFRESH_TOKEN_TTL_SECONDS:1209600}
+      bytes: ${AUTH_REFRESH_TOKEN_BYTES:48}
+    verification:
+      code-ttl-seconds: ${AUTH_VERIFICATION_CODE_TTL_SECONDS:300}
+      resend-interval-seconds: ${AUTH_VERIFICATION_RESEND_INTERVAL_SECONDS:60}
+      hourly-send-limit: ${AUTH_VERIFICATION_HOURLY_SEND_LIMIT:5}
+      max-failed-attempts: ${AUTH_VERIFICATION_MAX_FAILED_ATTEMPTS:5}
+      code-length: ${AUTH_VERIFICATION_CODE_LENGTH:6}
+    sender:
+      mode: ${AUTH_VERIFICATION_SENDER_MODE:logging}
+      expose-code-in-logs: ${AUTH_VERIFICATION_EXPOSE_CODE_IN_LOGS:false}
+  relation:
+    kafka:
+      events-topic: ${RELATION_EVENTS_TOPIC:relation-events}
+      follower-retry-topic: ${RELATION_FOLLOWER_RETRY_TOPIC:relation-follower-retry}
+      follower-dlq-topic: ${RELATION_FOLLOWER_DLQ_TOPIC:relation-follower-dlq}
+      follower-consumer-group: ${RELATION_FOLLOWER_CONSUMER_GROUP:relation-follower-projector-group}
+      follower-retry-consumer-group: ${RELATION_FOLLOWER_RETRY_CONSUMER_GROUP:relation-follower-retry-group}

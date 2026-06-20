@@ -1,0 +1,10 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(java -cp 'tmp;__TRACKED_VAR__' ApplyAuditTable)",
+      "Bash(cd /e/Code/One/backend && sed -n '47,79p' src/main/java/com/platform/auth/application/VerificationService.java)",
+      "Read(//e/e/Code/One/backend/src/main/java/com/platform/auth/application/**)",
+      "Bash(./mvnw.cmd test *)"
+    ]
+  }
+}
