@@ -61,6 +61,20 @@ platform:
     caffeine:
       maximum-size: ${LOCAL_CACHE_MAXIMUM_SIZE:10000}
       expire-after-write-seconds: ${LOCAL_CACHE_EXPIRE_SECONDS:300}
+    feed:
+      l2:
+        head-ttl-seconds: ${FEED_L2_HEAD_TTL_SECONDS:5}
+        cursor-ttl-seconds: ${FEED_L2_CURSOR_TTL_SECONDS:60}
+        max-size: ${FEED_L2_MAX_SIZE:10000}
+      l1:
+        head-ttl-seconds: ${FEED_L1_HEAD_TTL_SECONDS:4}
+        cursor-ttl-seconds: ${FEED_L1_CURSOR_TTL_SECONDS:120}
+      l0:
+        ttl-seconds: ${FEED_L0_TTL_SECONDS:300}
+      jitter-ratio: ${FEED_JITTER_RATIO:0.3}
+      reconciliation-interval-ms: ${FEED_RECONCILIATION_INTERVAL_MS:30000}
+      single-flight-lock-wait-ms: ${FEED_SINGLE_FLIGHT_LOCK_WAIT_MS:200}
+      single-flight-lock-ttl-seconds: ${FEED_SINGLE_FLIGHT_LOCK_TTL_SECONDS:10}
   auth:
     jwt:
       issuer: ${AUTH_JWT_ISSUER:knowledge-platform}

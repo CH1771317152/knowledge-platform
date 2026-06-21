@@ -76,6 +76,14 @@ public class SecurityConfig {
                         .requestMatchers(HttpMethod.GET,
                                 "/api/users/{userId}/following",
                                 "/api/users/{userId}/followers").permitAll()
+                        // Feed reads: the public feed (GET /api/feed/public) is permitAll — anonymous
+                        // readers see the page with likedByMe/favedByMe left null (the "no overlay
+                        // applied" sentinel); a Bearer token, if present, overlays both bits for the
+                        // authenticated reader. GET /api/feed/me is deliberately NOT here and falls
+                        // through to anyRequest().authenticated() — it is the current user's own feed
+                        // (drafts + published, all visibilities). The /api/feed/ prefix is distinct
+                        // from /api/posts/, /api/users/, /api/auth/, so no existing matcher conflicts.
+                        .requestMatchers(HttpMethod.GET, "/api/feed/public").permitAll()
                         .anyRequest().authenticated())
                 .addFilterBefore(jwtAuthenticationFilter, UsernamePasswordAuthenticationFilter.class)
                 .build();

@@ -133,6 +133,52 @@ public class RedisCounterStore implements CounterStore {
         return Boolean.TRUE.equals(b);
     }
 
+    /**
+     * Pipelined batched variant of {@link #hasActed}: issues one Redis round-trip containing all
+     * {@code eids.size() * metrics.size()} {@code GETBIT} calls. Each (eid, metric) resolves to its
+     * own bitmap key ({@code eid} is part of the key), while the bit offset is constant (derived
+     * from {@code userId}).
+     */
+    @Override
+    public Map<CounterMetric, Map<Long, Boolean>> hasActedBatch(
+            long userId,
+            CounterEntityType etype,
+            List<Long> eids,
+            List<CounterMetric> metrics) {
+        long bitOffset = bitIndex(userId);
+        int total = eids.size() * metrics.size();
+        // (metric, eid) pairs in submission order — metric-major, eid-minor — so we can zip the
+        // pipeline results back to their inputs below.
+        record Cell(CounterMetric metric, Long eid) {}
+        List<Cell> cells = new ArrayList<>(total);
+        // Pre-encode keys once per (eid, metric); the bit offset is identical across the batch.
+        List<byte[]> keys = new ArrayList<>(total);
+        for (CounterMetric m : metrics) {
+            for (Long eid : eids) {
+                cells.add(new Cell(m, eid));
+                keys.add(utf8(bmKey(etype, eid, m, userId)));
+            }
+        }
+        List<Object> raw = template.executePipelined((RedisCallback<Object>) conn -> {
+            for (byte[] key : keys) {
+                conn.stringCommands().getBit(key, bitOffset);
+            }
+            return null;
+        });
+        // executePipelined collects each GETBIT result as a Boolean via the default result converter.
+        Map<CounterMetric, Map<Long, Boolean>> out = new LinkedHashMap<>();
+        for (CounterMetric m : metrics) {
+            out.put(m, new LinkedHashMap<>());
+        }
+        for (int i = 0; i < cells.size(); i++) {
+            Cell cell = cells.get(i);
+            Object result = i < raw.size() ? raw.get(i) : null;
+            boolean acted = result instanceof Boolean b ? b : Boolean.TRUE.equals(result);
+            out.get(cell.metric()).put(cell.eid(), acted);
+        }
+        return out;
+    }
+
     @Override
     public boolean setBitIfAbsent(CounterEntityType etype, Long eid, CounterMetric metric, long userId) {
         String key = bmKey(etype, eid, metric, userId);

@@ -9,6 +9,7 @@ import org.springframework.cache.annotation.EnableCaching;
 import org.springframework.cache.caffeine.CaffeineCacheManager;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
+import org.springframework.context.annotation.Primary;
 
 @EnableCaching
 @Configuration
@@ -21,6 +22,7 @@ public class CaffeineCacheConfig {
     }
 
     @Bean
+    @Primary
     CacheManager cacheManager(LocalCacheProperties properties) {
         CaffeineCacheManager manager = new CaffeineCacheManager();
         manager.setCacheNames(List.of(

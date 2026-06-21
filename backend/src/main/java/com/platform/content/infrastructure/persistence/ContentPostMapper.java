@@ -2,6 +2,7 @@ package com.platform.content.infrastructure.persistence;
 
 import java.time.LocalDateTime;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 import org.apache.ibatis.annotations.Delete;
 import org.apache.ibatis.annotations.Insert;
@@ -243,4 +244,48 @@ public interface ContentPostMapper {
     List<ContentPostRow> findByAuthor(@Param("authorId") Long authorId,
                                       @Param("limit") int limit,
                                       @Param("offset") long offset);
+
+    // ---- keyset feed pagination (V4 indexes) ----
+    // Returns lightweight (id, published_at) pairs ordered strictly by (published_at DESC, id DESC)
+    // so the caller can build a complete keyset Cursor from every returned row. Served by
+    // idx_content_post_pub_feed (status, visibility, published_at DESC, id DESC).
+
+    @Select("""
+            SELECT id, published_at FROM content_post
+            WHERE status = 'PUBLISHED' AND visibility = 'PUBLIC'
+            ORDER BY published_at DESC, id DESC LIMIT #{limit}
+            """)
+    List<Map<String, Object>> findPublicFeedHead(@Param("limit") int limit);
+
+    @Select("""
+            SELECT id, published_at FROM content_post
+            WHERE status = 'PUBLISHED' AND visibility = 'PUBLIC'
+              AND (published_at < #{at} OR (published_at = #{at} AND id < #{id}))
+            ORDER BY published_at DESC, id DESC LIMIT #{limit}
+            """)
+    List<Map<String, Object>> findPublicFeedAfter(@Param("at") LocalDateTime at,
+                                                  @Param("id") Long id,
+                                                  @Param("limit") int limit);
+
+    // Returns lightweight (id, created_at) pairs ordered strictly by (created_at DESC, id DESC).
+    // Served by idx_content_post_author_feed (author_id, created_at DESC, id DESC).
+
+    @Select("""
+            SELECT id, created_at FROM content_post
+            WHERE author_id = #{userId} AND status <> 'DELETED'
+            ORDER BY created_at DESC, id DESC LIMIT #{limit}
+            """)
+    List<Map<String, Object>> findUserFeedHead(@Param("userId") Long userId,
+                                               @Param("limit") int limit);
+
+    @Select("""
+            SELECT id, created_at FROM content_post
+            WHERE author_id = #{userId} AND status <> 'DELETED'
+              AND (created_at < #{at} OR (created_at = #{at} AND id < #{id}))
+            ORDER BY created_at DESC, id DESC LIMIT #{limit}
+            """)
+    List<Map<String, Object>> findUserFeedAfter(@Param("userId") Long userId,
+                                                @Param("at") LocalDateTime at,
+                                                @Param("id") Long id,
+                                                @Param("limit") int limit);
 }

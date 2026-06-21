@@ -153,6 +153,23 @@ public class ContentQueryService {
     }
 
     /**
+     * Lightweight internal lookup of a post's full metadata by id, with no permission gating. Used by
+     * cross-module callers (e.g. the cache/feed module's L0 fragment backfill) that need the post's
+     * title / summary / cover / author / publishedAt to assemble a cached projection — not its body
+     * or visibility. Like {@link #findPostAuthorId}, a soft-deleted post is reported as absent so the
+     * caller treats it as "not found" and skips assembling a fragment for it.
+     *
+     * <p>This deliberately does <em>not</em> read the body from object storage
+     * (unlike {@link #getPostDetail}) — the fragment projection carries only metadata fields that
+     * live in the {@code content_post} row, so there is no extra round-trip.
+     */
+    @Transactional(readOnly = true)
+    public Optional<ContentPost> findPostById(Long postId) {
+        return repository.findPostById(postId)
+                .filter(post -> post.status() != PostStatus.DELETED);
+    }
+
+    /**
      * Returns the publishing state of a post for the recovery/query endpoint. Only the post's author
      * may read it; a non-author gets {@link ErrorCode#CONTENT_FORBIDDEN}, an absent post gets
      * {@link ErrorCode#CONTENT_POST_NOT_FOUND}. Shares the builder with {@link ContentCommandService}

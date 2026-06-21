@@ -17,8 +17,10 @@ import org.springframework.stereotype.Component;
 /**
  * USER-side {@code posts_count} feeder. Consumes the content module's {@code content-events} topic,
  * which carries raw-JSON {@link ContentPublishedPayload} objects (content publishes directly from an
- * {@code AFTER_COMMIT} listener, NOT via Canal), and folds a {@code +1 POSTS} delta into the Redis
- * agg for the post's author.
+ * {@code AFTER_COMMIT} listener, NOT via Canal), and folds a {@code POSTS} delta into the Redis
+ * agg for the post's author based on {@code eventType}: {@code +1} on {@code POST_PUBLISHED},
+ * {@code -1} on {@code POST_UNPUBLISHED}/{@code POST_DELETED}; edits and visibility changes are
+ * ignored (they don't move posts_count).
  *
  * <p>Idempotency: dedups via {@link CounterConsumedEventRepository#markConsumed(String, String)}
  * under this consumer's own group ({@code counter-content-group}). Any failure (malformed JSON or an
@@ -70,8 +72,15 @@ public class ContentPublishCountConsumer {
                 ack.acknowledge();
                 return;
             }
-            store.addToAggregate(CounterEntityType.USER, payload.authorId(),
-                    CounterMetric.POSTS, +1L);
+            switch (payload.eventType() != null ? payload.eventType() : "POST_PUBLISHED") {
+                case "POST_PUBLISHED" -> store.addToAggregate(
+                        CounterEntityType.USER, payload.authorId(), CounterMetric.POSTS, +1L);
+                case "POST_UNPUBLISHED", "POST_DELETED" -> store.addToAggregate(
+                        CounterEntityType.USER, payload.authorId(), CounterMetric.POSTS, -1L);
+                default -> {
+                    // POST_EDITED / POST_VISIBILITY_CHANGED — not relevant to posts_count.
+                }
+            }
             ack.acknowledge();
         } catch (Exception failure) {
             route(value, failure);

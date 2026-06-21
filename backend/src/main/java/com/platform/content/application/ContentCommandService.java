@@ -15,7 +15,7 @@ import com.platform.content.dto.CreateDraftRequest;
 import com.platform.content.dto.PostFileRequest;
 import com.platform.content.dto.PostPublishingStateResponse;
 import com.platform.content.dto.UpdatePostMetadataRequest;
-import com.platform.content.event.PostPublishedEvent;
+import com.platform.content.event.ContentPostEvent;
 import com.platform.content.infrastructure.id.ContentIdGenerator;
 import com.platform.content.repository.ContentPostRepository;
 import com.platform.storage.application.ObjectStorageService;
@@ -253,7 +253,17 @@ public class ContentCommandService {
 
     // --- stage 4: update metadata ---------------------------------------------
 
-    /** Sets title/summary/visibility/cover, replaces file references and tags, advances stage. */
+    /**
+     * Sets title/summary/visibility/cover, replaces file references and tags, advances stage.
+     *
+     * <p>Emits a {@link ContentPostEvent} of type {@code POST_EDITED} on the successful completion
+     * of the metadata write. If the request also changed {@code visibility} (comparing the post's
+     * pre-update visibility to the request's new value), a second {@link ContentPostEvent} of type
+     * {@code POST_VISIBILITY_CHANGED} is co-emitted, carrying {@code oldVisibility}/
+     * {@code newVisibility} (as {@link Enum#name()} strings) in its {@code changes} map. The Kafka
+     * publisher forwards both to {@code content-events} so downstream consumers (counter, feed)
+     * can react to either transition.
+     */
     @Transactional
     public PostPublishingStateResponse updateMetadata(Long authorId, Long postId, UpdatePostMetadataRequest request) {
         ContentPost post = loadOwnedNonDeletedPost(authorId, postId);
@@ -300,6 +310,12 @@ public class ContentCommandService {
             }
         }
 
+        // Detect a visibility change BEFORE the repository write overwrites the field. The events
+        // fire AFTER the repo writes succeed (below), so a rollback drops them along with the write.
+        PostVisibility oldVisibility = post.visibility();
+        PostVisibility newVisibility = request.visibility();
+        boolean visibilityChanged = oldVisibility != newVisibility;
+
         repository.updateMetadata(
                 postId, request.title(), request.summary(), request.visibility(),
                 trimToNull(request.coverObjectKey()));
@@ -307,6 +323,22 @@ public class ContentCommandService {
         repository.replaceTags(postId, request.tags() == null ? List.of() : request.tags());
         repository.updateStatusAndStage(
                 postId, post.status(), PublishStage.METADATA_COMPLETED, post.publishedAt());
+
+        String eventId = UUID.randomUUID().toString();
+        LocalDateTime at = LocalDateTime.now();
+        applicationEventPublisher.publishEvent(
+                ContentPostEvent.edited(eventId, postId, post.authorId(), at));
+        if (visibilityChanged) {
+            // Separate eventId so the two events are independently dedup-able downstream; the
+            // counter reconciliation ledger keys on (eventId, eventType).
+            applicationEventPublisher.publishEvent(ContentPostEvent.visibilityChanged(
+                    UUID.randomUUID().toString(),
+                    postId,
+                    post.authorId(),
+                    LocalDateTime.now(),
+                    oldVisibility.name(),
+                    newVisibility.name()));
+        }
 
         return PublishingStateBuilder.build(refetch(postId), repository.findBodyByPostId(postId));
     }
@@ -319,11 +351,11 @@ public class ContentCommandService {
      * and preserved across any future re-publish.
      *
      * <p>On the actual first-publish transition ({@code publishedAt} was null → now PUBLISHED), emits
-     * a {@link PostPublishedEvent} via the in-process {@link ApplicationEventPublisher}. A
-     * {@code @TransactionalEventListener(AFTER_COMMIT)} Kafka publisher in the {@code event} package
-     * then forwards it to the {@code content-events} Kafka topic so the counter module can increment
-     * the author's {@code posts_count}. The event is NOT emitted on an idempotent re-publish of an
-     * already-published post.
+     * a {@link ContentPostEvent} (type {@code POST_PUBLISHED}) via the in-process
+     * {@link ApplicationEventPublisher}. A {@code @TransactionalEventListener(AFTER_COMMIT)} Kafka
+     * publisher in the {@code event} package then forwards it to the {@code content-events} Kafka
+     * topic so the counter module can increment the author's {@code posts_count}. The event is NOT
+     * emitted on an idempotent re-publish of an already-published post.
      */
     @Transactional
     public PostPublishingStateResponse publish(Long authorId, Long postId) {
@@ -348,7 +380,7 @@ public class ContentCommandService {
 
         if (firstPublish) {
             // In-process event; the Kafka publisher (gated by @Profile) forwards it after commit.
-            applicationEventPublisher.publishEvent(new PostPublishedEvent(
+            applicationEventPublisher.publishEvent(ContentPostEvent.published(
                     UUID.randomUUID().toString(),
                     postId,
                     post.authorId(),
@@ -363,6 +395,9 @@ public class ContentCommandService {
     /**
      * Moves a PUBLISHED post back to DRAFT, keeping {@code publishedAt} and the METADATA_COMPLETED
      * stage so it can be re-published. Idempotent for an already-DRAFT post.
+     *
+     * <p>On the actual PUBLISHED → DRAFT transition, emits a {@link ContentPostEvent} of type
+     * {@code POST_UNPUBLISHED}. No event on the idempotent already-DRAFT path.
      */
     @Transactional
     public PostPublishingStateResponse unpublish(Long authorId, Long postId) {
@@ -371,8 +406,15 @@ public class ContentCommandService {
         if (post.status() == PostStatus.PUBLISHED) {
             repository.updateStatusAndStage(
                     postId, PostStatus.DRAFT, PublishStage.METADATA_COMPLETED, post.publishedAt());
+            // In-process event; the Kafka publisher forwards it after commit so the counter can
+            // decrement the author's posts_count.
+            applicationEventPublisher.publishEvent(ContentPostEvent.unpublished(
+                    UUID.randomUUID().toString(),
+                    postId,
+                    post.authorId(),
+                    LocalDateTime.now()));
         } else if (post.status() == PostStatus.DRAFT) {
-            // Idempotent: already a draft.
+            // Idempotent: already a draft. No event.
         } else {
             // DELETED — cannot unpublish a deleted post. Report CONTENT_ALREADY_DELETED; this is
             // the same guard the other mutating methods apply via loadOwnedPost, but loadOwnedPost
@@ -385,18 +427,28 @@ public class ContentCommandService {
         return PublishingStateBuilder.build(refetch(postId), repository.findBodyByPostId(postId));
     }
 
-    /** Soft-deletes the post (idempotent for an already-deleted post). */
+    /**
+     * Soft-deletes the post (idempotent for an already-deleted post).
+     *
+     * <p>On the active → DELETED transition, emits a {@link ContentPostEvent} of type
+     * {@code POST_DELETED}. No event on the idempotent already-DELETED path.
+     */
     @Transactional
     public PostPublishingStateResponse delete(Long authorId, Long postId) {
         ContentPost post = loadOwnedNonDeletedPost(authorId, postId);
 
         if (post.status() == PostStatus.DELETED) {
             // Idempotent. (loadOwnedNonDeletedPost already rejects DELETED, so this branch is
-            // defensive; left explicit for clarity.)
+            // defensive; left explicit for clarity.) No event.
             return PublishingStateBuilder.build(post, repository.findBodyByPostId(postId));
         }
 
         repository.softDelete(postId);
+        applicationEventPublisher.publishEvent(ContentPostEvent.deleted(
+                UUID.randomUUID().toString(),
+                postId,
+                post.authorId(),
+                LocalDateTime.now()));
         return PublishingStateBuilder.build(refetch(postId), repository.findBodyByPostId(postId));
     }
 

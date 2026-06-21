@@ -60,3 +60,14 @@ GET    /api/users/{userId}/relation
 ```text
 POST /api/storage/presign
 ```
+
+## Feed
+
+```text
+GET /api/feed/public             (公开) 公共 Feed（PUBLISHED + PUBLIC，published_at 倒序）
+                                      cursor 可选（缺省 = head），格式 {ISO LocalDateTime},{id}
+                                      size 默认 20，钳制 [1,50]
+                                      Bearer 可选 → 登录读者带 likedByMe/favedByMe overlay，匿名则两位为 null
+GET /api/feed/me                 (认证) 当前用户的 Feed（draft + published，所有可见性，排除 DELETED，created_at 倒序）
+                                      cursor / size 同上
+```

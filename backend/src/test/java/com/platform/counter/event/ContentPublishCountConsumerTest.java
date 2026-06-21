@@ -77,7 +77,73 @@ class ContentPublishCountConsumerTest {
 
     @Test
     void publishIncrementsAuthorPostsCount() {
-        String value = publishPayloadJson("evt-publish");
+        String value = publishPayloadJson("evt-publish", "POST_PUBLISHED");
+
+        consumer.onPublishEvent(value, ack);
+
+        assertThat(store.aggregateCalls).hasSize(1);
+        assertThat(store.aggregateCalls.get(0))
+                .isEqualTo(new AggregateCall(CounterEntityType.USER, AUTHOR_ID,
+                        CounterMetric.POSTS, +1L));
+        verify(ack, times(1)).acknowledge();
+        verifyNoRetryOrDlqSend();
+    }
+
+    @Test
+    void unpublishEventDecrementsPostsCount() {
+        String value = publishPayloadJson("evt-unpublish", "POST_UNPUBLISHED");
+
+        consumer.onPublishEvent(value, ack);
+
+        assertThat(store.aggregateCalls).hasSize(1);
+        assertThat(store.aggregateCalls.get(0))
+                .isEqualTo(new AggregateCall(CounterEntityType.USER, AUTHOR_ID,
+                        CounterMetric.POSTS, -1L));
+        verify(ack, times(1)).acknowledge();
+        verifyNoRetryOrDlqSend();
+    }
+
+    @Test
+    void deletedEventDecrementsPostsCount() {
+        String value = publishPayloadJson("evt-delete", "POST_DELETED");
+
+        consumer.onPublishEvent(value, ack);
+
+        assertThat(store.aggregateCalls).hasSize(1);
+        assertThat(store.aggregateCalls.get(0))
+                .isEqualTo(new AggregateCall(CounterEntityType.USER, AUTHOR_ID,
+                        CounterMetric.POSTS, -1L));
+        verify(ack, times(1)).acknowledge();
+        verifyNoRetryOrDlqSend();
+    }
+
+    @Test
+    void editedEventIsIgnored() {
+        String value = publishPayloadJson("evt-edit", "POST_EDITED");
+
+        consumer.onPublishEvent(value, ack);
+
+        assertThat(store.aggregateCalls).isEmpty();
+        verify(ack, times(1)).acknowledge();
+        verifyNoRetryOrDlqSend();
+    }
+
+    @Test
+    void visibilityChangedEventIsIgnored() {
+        // Defensive: POST_VISIBILITY_CHANGED is the other "no posts_count delta" event.
+        String value = publishPayloadJson("evt-visibility", "POST_VISIBILITY_CHANGED");
+
+        consumer.onPublishEvent(value, ack);
+
+        assertThat(store.aggregateCalls).isEmpty();
+        verify(ack, times(1)).acknowledge();
+        verifyNoRetryOrDlqSend();
+    }
+
+    @Test
+    void nullEventTypeDefaultsToPublished() {
+        // A publisher that omits eventType (backward compat) is treated as POST_PUBLISHED.
+        String value = publishPayloadJsonWithoutEventType("evt-null-etype");
 
         consumer.onPublishEvent(value, ack);
 
@@ -125,14 +191,43 @@ class ContentPublishCountConsumerTest {
 
     /**
      * Builds a raw-JSON {@link ContentPublishedPayload} matching what content's
-     * {@code PostPublishedEventKafkaPublisher} emits (NOT a Canal flat message).
+     * {@code ContentPostEventKafkaPublisher} emits (NOT a Canal flat message), with the given
+     * {@code eventType}.
      */
-    private static String publishPayloadJson(String eventId) {
+    private static String publishPayloadJson(String eventId, String eventType) {
         ObjectMapper mapper = new ObjectMapper().findAndRegisterModules();
         ContentPublishedPayload payload = new ContentPublishedPayload(
-                eventId, POST_ID, AUTHOR_ID, "POST_PUBLISHED", "2026-06-21T09:00:00");
+                eventId, POST_ID, AUTHOR_ID, eventType, "2026-06-21T09:00:00");
         try {
             return mapper.writeValueAsString(payload);
+        } catch (Exception e) {
+            throw new RuntimeException(e);
+        }
+    }
+
+    /** Convenience for callers that still pass only an eventId (defaults to POST_PUBLISHED). */
+    private static String publishPayloadJson(String eventId) {
+        return publishPayloadJson(eventId, "POST_PUBLISHED");
+    }
+
+    /**
+     * Builds a payload that omits {@code eventType} entirely — exercises the consumer's
+     * null-defaults-to-{@code POST_PUBLISHED} branch.
+     */
+    private static String publishPayloadJsonWithoutEventType(String eventId) {
+        ObjectMapper mapper = new ObjectMapper().findAndRegisterModules();
+        // Build the JSON manually so eventType is truly absent (not just null), matching a legacy
+        // publisher that predates the eventType field.
+        String json = "{"
+                + "\"eventId\":\"" + eventId + "\","
+                + "\"postId\":" + POST_ID + ","
+                + "\"authorId\":" + AUTHOR_ID + ","
+                + "\"occurredAt\":\"2026-06-21T09:00:00\""
+                + "}";
+        // Verify it deserializes via Jackson's unknown-property-tolerant path into the record.
+        try {
+            return mapper.writeValueAsString(
+                    mapper.readValue(json, ContentPublishedPayload.class));
         } catch (Exception e) {
             throw new RuntimeException(e);
         }

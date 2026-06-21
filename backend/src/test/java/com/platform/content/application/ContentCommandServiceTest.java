@@ -20,7 +20,8 @@ import com.platform.content.dto.CreateDraftRequest;
 import com.platform.content.dto.PostFileRequest;
 import com.platform.content.dto.PostPublishingStateResponse;
 import com.platform.content.dto.UpdatePostMetadataRequest;
-import com.platform.content.event.PostPublishedEvent;
+import com.platform.content.event.ContentPostEvent;
+import com.platform.content.event.ContentPostEventType;
 import com.platform.content.infrastructure.id.ContentIdGenerator;
 import com.platform.content.repository.ContentPostRepository;
 import com.platform.storage.infrastructure.FakeObjectStorageService;
@@ -545,25 +546,146 @@ class ContentCommandServiceTest {
     @Test
     void publishEmitsPostPublishedEventOnFirstPublish() {
         Long postId = fullyPreparedPost(AUTHOR);
+        // fullyPreparedPost runs updateMetadata once, which emits POST_EDITED (+ VISIBILITY_CHANGED
+        // if visibility changed). Clear the recorder so we assert only on the publish transition.
+        eventPublisher.published.clear();
 
         service.publish(AUTHOR, postId);
 
-        // Exactly one PostPublishedEvent on the real first-publish transition.
+        // Exactly one ContentPostEvent (POST_PUBLISHED) on the real first-publish transition.
         assertThat(eventPublisher.published).hasSize(1);
-        Object only = eventPublisher.published.get(0);
-        assertThat(only).isInstanceOf(PostPublishedEvent.class);
-        PostPublishedEvent event = (PostPublishedEvent) only;
+        ContentPostEvent event = (ContentPostEvent) eventPublisher.published.get(0);
+        assertThat(event.eventType()).isEqualTo(ContentPostEventType.POST_PUBLISHED);
         assertThat(event.postId()).isEqualTo(postId);
         assertThat(event.authorId()).isEqualTo(AUTHOR);
         assertThat(event.eventId()).isNotBlank();
         assertThat(event.occurredAt()).isNotNull();
+        assertThat(event.changes()).isEmpty();
 
         // Idempotent re-publish MUST NOT emit a second event.
         service.publish(AUTHOR, postId);
         assertThat(eventPublisher.published).hasSize(1);
     }
 
+    @Test
+    void unpublishEmitsPostUnpublishedEvent() {
+        Long postId = fullyPreparedPost(AUTHOR);
+        service.publish(AUTHOR, postId);
+        eventPublisher.published.clear();
+
+        service.unpublish(AUTHOR, postId);
+
+        assertThat(eventsOfType(ContentPostEventType.POST_UNPUBLISHED)).hasSize(1);
+        ContentPostEvent event = singleOf(ContentPostEventType.POST_UNPUBLISHED);
+        assertThat(event.postId()).isEqualTo(postId);
+        assertThat(event.authorId()).isEqualTo(AUTHOR);
+        assertThat(event.changes()).isEmpty();
+    }
+
+    @Test
+    void unpublishWhenAlreadyDraftEmitsNoEvent() {
+        Long postId = fullyPreparedPost(AUTHOR);
+        // fullyPreparedPost leaves the post at METADATA_COMPLETED, status DRAFT (never published).
+        assertThat(repository.findPostById(postId).orElseThrow().status()).isEqualTo(PostStatus.DRAFT);
+        eventPublisher.published.clear();
+
+        service.unpublish(AUTHOR, postId);
+
+        // Idempotent DRAFT → DRAFT path: no event of any kind.
+        assertThat(eventPublisher.published)
+                .as("no event on the idempotent already-DRAFT unpublish")
+                .isEmpty();
+    }
+
+    @Test
+    void deleteEmitsPostDeletedEvent() {
+        Long postId = fullyPreparedPost(AUTHOR);
+        eventPublisher.published.clear();
+
+        service.delete(AUTHOR, postId);
+
+        assertThat(eventsOfType(ContentPostEventType.POST_DELETED)).hasSize(1);
+        ContentPostEvent event = singleOf(ContentPostEventType.POST_DELETED);
+        assertThat(event.postId()).isEqualTo(postId);
+        assertThat(event.authorId()).isEqualTo(AUTHOR);
+        assertThat(event.changes()).isEmpty();
+    }
+
+    @Test
+    void deleteWhenAlreadyDeletedEmitsNoEvent() {
+        Long postId = fullyPreparedPost(AUTHOR);
+        service.delete(AUTHOR, postId);
+        eventPublisher.published.clear();
+
+        // Second delete on an already-DELETED post: loadOwnedNonDeletedPost throws, so no event.
+        assertThatThrownBy(() -> service.delete(AUTHOR, postId))
+                .isInstanceOf(PlatformException.class)
+                .matches(ex -> ((PlatformException) ex).errorCode() == ErrorCode.CONTENT_ALREADY_DELETED);
+        assertThat(eventPublisher.published)
+                .as("no event on the idempotent already-DELETED delete")
+                .isEmpty();
+    }
+
+    @Test
+    void updateMetadataEmitsPostEditedEvent() {
+        Long postId = fullyPreparedPost(AUTHOR);
+        eventPublisher.published.clear(); // fullyPreparedPost already called updateMetadata once.
+
+        // Same visibility (PUBLIC → PUBLIC) — only EDITED, no VISIBILITY_CHANGED.
+        service.updateMetadata(AUTHOR, postId, new UpdatePostMetadataRequest(
+                "New Title", "new summary", PostVisibility.PUBLIC, null, List.of(), List.of()));
+
+        assertThat(eventsOfType(ContentPostEventType.POST_EDITED)).hasSize(1);
+        ContentPostEvent edited = singleOf(ContentPostEventType.POST_EDITED);
+        assertThat(edited.postId()).isEqualTo(postId);
+        assertThat(edited.authorId()).isEqualTo(AUTHOR);
+        assertThat(edited.changes()).isEmpty();
+
+        // Same-visibility path MUST NOT co-emit a visibility-changed event.
+        assertThat(eventsOfType(ContentPostEventType.POST_VISIBILITY_CHANGED))
+                .as("no VISIBILITY_CHANGED when visibility is unchanged")
+                .isEmpty();
+    }
+
+    @Test
+    void updateMetadataChangingVisibilityEmitsBothEditedAndVisibilityChanged() {
+        Long postId = fullyPreparedPost(AUTHOR);
+        // fullyPreparedPost seeds visibility = PUBLIC.
+        assertThat(repository.findPostById(postId).orElseThrow().visibility())
+                .isEqualTo(PostVisibility.PUBLIC);
+        eventPublisher.published.clear();
+
+        // Flip PUBLIC → PRIVATE.
+        service.updateMetadata(AUTHOR, postId, new UpdatePostMetadataRequest(
+                "T", null, PostVisibility.PRIVATE, null, List.of(), List.of()));
+
+        assertThat(eventsOfType(ContentPostEventType.POST_EDITED)).hasSize(1);
+        assertThat(eventsOfType(ContentPostEventType.POST_VISIBILITY_CHANGED)).hasSize(1);
+
+        ContentPostEvent vis = singleOf(ContentPostEventType.POST_VISIBILITY_CHANGED);
+        assertThat(vis.postId()).isEqualTo(postId);
+        assertThat(vis.authorId()).isEqualTo(AUTHOR);
+        assertThat(vis.changes()).containsEntry("oldVisibility", "PUBLIC");
+        assertThat(vis.changes()).containsEntry("newVisibility", "PRIVATE");
+    }
+
     // --- shared fixtures ------------------------------------------------------
+
+    /** Filters the recorded events to those of the given {@link ContentPostEventType}. */
+    private java.util.List<ContentPostEvent> eventsOfType(ContentPostEventType type) {
+        return eventPublisher.published.stream()
+                .filter(ContentPostEvent.class::isInstance)
+                .map(ContentPostEvent.class::cast)
+                .filter(e -> e.eventType() == type)
+                .toList();
+    }
+
+    /** Asserts exactly one event of the given type was recorded and returns it. */
+    private ContentPostEvent singleOf(ContentPostEventType type) {
+        java.util.List<ContentPostEvent> matches = eventsOfType(type);
+        assertThat(matches).hasSize(1);
+        return matches.get(0);
+    }
 
     /** Creates a draft and requests the body upload URL, leaving the post at BODY_URL_ISSUED. */
     private Long seedConfirmedReadyPost(Long author, String clientRequestId) {

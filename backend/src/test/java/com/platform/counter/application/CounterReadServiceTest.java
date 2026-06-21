@@ -93,6 +93,29 @@ class CounterReadServiceTest {
         assertThat(service.hasActed(USER, CounterEntityType.ARTICLE, POST_ID, CounterMetric.FAV)).isFalse();
     }
 
+    @Test
+    void hasActedBatchDelegatesToStoreForEachMetricAndEid() {
+        // The default CounterStore#hasActedBatch fans out to one hasActed per (metric, eid);
+        // FakeCounterStore.hasActed returns hasActedResult for every call, so the batch result
+        // should be the full cartesian product, keyed metric -> eid -> boolean.
+        store.hasActedResult = true;
+        List<Long> eids = List.of(11L, 22L, 33L);
+        List<CounterMetric> metrics = List.of(CounterMetric.LIKE, CounterMetric.FAV);
+
+        Map<CounterMetric, Map<Long, Boolean>> result =
+                service.hasActedBatch(USER, CounterEntityType.ARTICLE, eids, metrics);
+
+        assertThat(result).hasSize(2).containsOnlyKeys(CounterMetric.LIKE, CounterMetric.FAV);
+        for (CounterMetric m : metrics) {
+            assertThat(result.get(m)).hasSize(3).containsOnlyKeys(11L, 22L, 33L);
+            for (Long eid : eids) {
+                assertThat(result.get(m).get(eid)).isTrue();
+            }
+        }
+        // The default fan-out should have issued exactly eids*metrics hasActed calls.
+        assertThat(store.hasActedCallCount).isEqualTo(eids.size() * metrics.size());
+    }
+
     // --- helpers --------------------------------------------------------------
 
     /** Records the arguments of the most recent {@link CounterStore#hasActed} call. */
@@ -106,6 +129,7 @@ class CounterReadServiceTest {
         Map<CounterMetric, Long> counts = Map.of();
         boolean hasActedResult = false;
         HasActedCall lastHasActed;
+        int hasActedCallCount = 0;
 
         @Override
         public Map<CounterMetric, Long> readCounts(CounterEntityType et, Long eid) {
@@ -115,6 +139,7 @@ class CounterReadServiceTest {
         @Override
         public boolean hasActed(CounterEntityType et, Long eid, CounterMetric metric, long userId) {
             lastHasActed = new HasActedCall(et, eid, metric, userId);
+            hasActedCallCount++;
             return hasActedResult;
         }
 

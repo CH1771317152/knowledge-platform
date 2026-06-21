@@ -3,6 +3,7 @@ package com.platform.counter.application;
 import com.platform.counter.domain.CounterEntityType;
 import com.platform.counter.domain.CounterMetric;
 import com.platform.counter.dto.ArticleCountersResponse;
+import java.util.List;
 import java.util.Map;
 import org.springframework.context.annotation.Profile;
 import org.springframework.stereotype.Service;
@@ -55,6 +56,16 @@ public class CounterReadService {
      */
     public boolean hasActed(long userId, CounterEntityType etype, Long eid, CounterMetric metric) {
         return store.hasActed(etype, eid, metric, userId);
+    }
+
+    /**
+     * Batched has-acted lookup for the cache/feed overlay: returns, for each requested metric, a
+     * per-eid boolean. Delegates to {@link CounterStore#hasActedBatch}; the Redis store pipelines
+     * all {@code GETBIT} calls into one round-trip.
+     */
+    public Map<CounterMetric, Map<Long, Boolean>> hasActedBatch(
+            long userId, CounterEntityType etype, List<Long> eids, List<CounterMetric> metrics) {
+        return store.hasActedBatch(userId, etype, eids, metrics);
     }
 
     private static long get(Map<CounterMetric, Long> counts, CounterMetric metric) {
