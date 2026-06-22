@@ -55,7 +55,8 @@ class FeedReconciliationSchedulerTest {
                 new FeedCacheProperties.L2(5, 60, 10_000),
                 new FeedCacheProperties.L1(HEAD_TTL, 120),
                 new FeedCacheProperties.L0(300),
-                0.3, 30_000L, 200, 10);
+                0.3, 30_000L, 200, 10,
+                FeedCacheProperties.HotKey.defaults());
         scheduler = new FeedReconciliationScheduler(sourceQuery, skeletonStore, props);
     }
 

@@ -5,6 +5,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import com.platform.cache.feed.config.FeedCacheProperties;
 import com.platform.cache.feed.domain.Cursor;
 import com.platform.cache.feed.domain.FeedPage;
+import com.platform.cache.feed.hotkey.FeedHotKeyDetector;
 import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.List;
@@ -35,6 +36,9 @@ class SkeletonStoreIntegrationTest {
 
     @Autowired
     private FeedCacheProperties props;
+
+    @Autowired
+    private FeedHotKeyDetector hotKeyDetector;
 
     private final List<String> pageKeys = new ArrayList<>();
 
@@ -147,39 +151,54 @@ class SkeletonStoreIntegrationTest {
     }
 
     @Test
-    void putAppliesTtlJitterAboveBase() {
-        // The jitter formula is ttl * (1 + rand(0..jitterRatio)); jitter can be 0, so loop a few
-        // times to make it overwhelmingly likely we observe a jittered (above-base) TTL.
-        String pageKey = uniquePageKey();
-        int baseTtl = props.l1().headTtlSeconds();
+    void putAppliesHeatAwareTtlWithJitter() {
+        // The TTL comes from FeedHotKeyDetector: cold key → baseTtlSeconds + jitter[5..10].
+        // Loop a few times to make it overwhelmingly likely we observe a jittered (above-base) TTL.
+        int hotKeyBase = props.hotKey().baseTtlSeconds();
+        int jitterMax = props.hotKey().jitterMaxSeconds();
 
         boolean observedJittered = false;
         for (int i = 0; i < 8 && !observedJittered; i++) {
             String pk = uniquePageKey();
-            store.put(pk, sample(), baseTtl);
+            store.put(pk, sample(), props.l1().headTtlSeconds());
             Long ttlSeconds = template.getExpire(FeedRedisKeys.skeleton(pk));
             assertThat(ttlSeconds).as("skeleton must have a positive TTL").isPositive();
-            // The TTL can fall at most a couple of seconds below baseTtl due to SET-to-getExpire
-            // latency; jittered values sit above baseTtl. Allow a small slack on the lower bound.
-            long lowerBound = baseTtl - 3L;
-            assertThat(ttlSeconds).as("TTL must be >= base-slack")
-                    .isGreaterThanOrEqualTo(lowerBound);
-            if (ttlSeconds > baseTtl) {
+            // The effective TTL is at least hotKeyBase (cold key) and at most hotKeyBase + jitterMax.
+            // Allow a small slack on either side for SET-to-getExpire latency.
+            assertThat(ttlSeconds).as("TTL must be >= hot-key base - slack")
+                    .isGreaterThanOrEqualTo((long) hotKeyBase - 3L);
+            assertThat(ttlSeconds).as("TTL must not exceed hot-key base + jitterMax + slack")
+                    .isLessThanOrEqualTo((long) hotKeyBase + jitterMax + 5L);
+            if (ttlSeconds > hotKeyBase) {
                 observedJittered = true;
             }
         }
-        // Allow the upper-bound check to fail the test only when we did observe a jittered value.
-        long upperBound = (long) Math.ceil(baseTtl * (1.0 + props.jitterRatio())) + 5L;
-        Long ttlSeconds = template.getExpire(FeedRedisKeys.skeleton(pageKey));
-        if (ttlSeconds != null && ttlSeconds > baseTtl) {
-            assertThat(ttlSeconds).as("TTL with jitter must not exceed base*(1+jitter)+slack")
-                    .isLessThanOrEqualTo(upperBound);
-        }
-        // Even if every iteration happened to draw jitter==0, at least assert we observed a
-        // jittered value across the retries (the formula's randomness makes this astronomically
-        // unlikely to fail).
-        assertThat(observedJittered).as("expected to observe at least one TTL above base (jitter)")
+        assertThat(observedJittered).as("expected to observe at least one TTL above hot-key base (jitter)")
                 .isTrue();
+    }
+
+    @Test
+    void hotPageKeyGetsLongerSkeletonTtl() {
+        String cold = uniquePageKey();
+        String hot = uniquePageKey();
+
+        // Push the hot pageKey past the high threshold so its TTL gets the high-extra seconds.
+        for (int i = 0; i < 250; i++) {
+            hotKeyDetector.record(hot);
+        }
+
+        store.put(cold, sample(), props.l1().headTtlSeconds());
+        store.put(hot, sample(), props.l1().headTtlSeconds());
+
+        Long coldTtl = template.getExpire(FeedRedisKeys.skeleton(cold));
+        Long hotTtl = template.getExpire(FeedRedisKeys.skeleton(hot));
+
+        assertThat(coldTtl).as("cold skeleton must have a positive TTL").isPositive();
+        assertThat(hotTtl).as("hot skeleton must have a positive TTL").isPositive();
+        // Cold TTL is baseTtl + jitter[5..10]; hot TTL is baseTtl + highExtra + jitter[5..10].
+        // highExtra defaults to 120s, so the hot TTL must exceed the cold TTL by a comfortable margin.
+        assertThat(hotTtl).as("hot pageKey must get a longer skeleton TTL than cold pageKey")
+                .isGreaterThan(coldTtl + 60);
     }
 
     @Test

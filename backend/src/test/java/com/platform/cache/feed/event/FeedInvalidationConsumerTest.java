@@ -8,6 +8,7 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.platform.cache.feed.hotkey.FeedHotKeyDetector;
 import com.platform.cache.feed.infrastructure.redis.FeedRedisKeys;
 import com.platform.cache.feed.infrastructure.redis.FragmentStore;
 import com.platform.cache.feed.infrastructure.redis.SkeletonStore;
@@ -39,6 +40,7 @@ class FeedInvalidationConsumerTest {
     private FragmentStore fragmentStore;
     private Acknowledgment ack;
     private ObjectMapper objectMapper;
+    private FeedHotKeyDetector hotKeyDetector;
 
     private FeedInvalidationConsumer consumer;
 
@@ -48,7 +50,8 @@ class FeedInvalidationConsumerTest {
         fragmentStore = mock(FragmentStore.class);
         ack = mock(Acknowledgment.class);
         objectMapper = new ObjectMapper().findAndRegisterModules();
-        consumer = new FeedInvalidationConsumer(skeletonStore, fragmentStore, objectMapper);
+        hotKeyDetector = mock(FeedHotKeyDetector.class);
+        consumer = new FeedInvalidationConsumer(skeletonStore, fragmentStore, objectMapper, hotKeyDetector);
     }
 
     /** Releases the delayed-delete executor thread; tests that exercise the scheduler call this. */
@@ -71,6 +74,9 @@ class FeedInvalidationConsumerTest {
         verify(skeletonStore, times(1)).delete(FeedRedisKeys.userHead(AUTHOR_ID, 10));
         verify(skeletonStore, times(1)).delete(FeedRedisKeys.userHead(AUTHOR_ID, 20));
         verify(skeletonStore, times(1)).delete(FeedRedisKeys.userHead(AUTHOR_ID, 50));
+        // Each invalidated head pageKey also has its local heat reset.
+        verify(hotKeyDetector, times(1)).reset(FeedRedisKeys.publicHead(20));
+        verify(hotKeyDetector, times(1)).reset(FeedRedisKeys.userHead(AUTHOR_ID, 20));
         // Publish does NOT touch fragments (the post is new; no stale fragment exists yet).
         verifyNoInteractions(fragmentStore);
         verify(ack, times(1)).acknowledge();
@@ -99,6 +105,8 @@ class FeedInvalidationConsumerTest {
         verify(fragmentStore, times(1)).delete(POST_ID);
         // An edit does NOT change the id list, so skeletons are left alone.
         verifyNoInteractions(skeletonStore);
+        // An edit does not invalidate any pageKey either — no heat reset.
+        verifyNoInteractions(hotKeyDetector);
         // And no tombstone — the post still exists, it just changed.
         verify(fragmentStore, never()).putTombstone(any());
         verify(ack, times(1)).acknowledge();
@@ -140,6 +148,11 @@ class FeedInvalidationConsumerTest {
         verify(skeletonStore, never()).delete(FeedRedisKeys.userHead(AUTHOR_ID, 10));
         verify(skeletonStore, never()).delete(FeedRedisKeys.userHead(AUTHOR_ID, 20));
         verify(skeletonStore, never()).delete(FeedRedisKeys.userHead(AUTHOR_ID, 50));
+        // Only the public head pageKey's heat is reset; the user head pageKey is untouched.
+        verify(hotKeyDetector, times(1)).reset(FeedRedisKeys.publicHead(20));
+        verify(hotKeyDetector, never()).reset(FeedRedisKeys.userHead(AUTHOR_ID, 10));
+        verify(hotKeyDetector, never()).reset(FeedRedisKeys.userHead(AUTHOR_ID, 20));
+        verify(hotKeyDetector, never()).reset(FeedRedisKeys.userHead(AUTHOR_ID, 50));
         // No tombstone — the post still exists.
         verify(fragmentStore, never()).putTombstone(any());
         verify(ack, times(1)).acknowledge();

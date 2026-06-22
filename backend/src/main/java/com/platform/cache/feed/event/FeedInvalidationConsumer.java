@@ -2,6 +2,7 @@ package com.platform.cache.feed.event;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.platform.cache.feed.hotkey.FeedHotKeyDetector;
 import com.platform.cache.feed.infrastructure.redis.FeedRedisKeys;
 import com.platform.cache.feed.infrastructure.redis.FragmentStore;
 import com.platform.cache.feed.infrastructure.redis.SkeletonStore;
@@ -79,14 +80,17 @@ public class FeedInvalidationConsumer {
     private final SkeletonStore skeletonStore;
     private final FragmentStore fragmentStore;
     private final ObjectMapper objectMapper;
+    private final FeedHotKeyDetector hotKeyDetector;
     private final ScheduledExecutorService delayedDelete;
 
     public FeedInvalidationConsumer(SkeletonStore skeletonStore,
                                     FragmentStore fragmentStore,
-                                    ObjectMapper objectMapper) {
+                                    ObjectMapper objectMapper,
+                                    FeedHotKeyDetector hotKeyDetector) {
         this.skeletonStore = skeletonStore;
         this.fragmentStore = fragmentStore;
         this.objectMapper = objectMapper;
+        this.hotKeyDetector = hotKeyDetector;
         this.delayedDelete = Executors.newSingleThreadScheduledExecutor(r -> {
             Thread t = new Thread(r, "feed-invalidation-double-delete");
             t.setDaemon(true);
@@ -160,6 +164,10 @@ public class FeedInvalidationConsumer {
                     ? FeedRedisKeys.userHead(authorId, size)
                     : FeedRedisKeys.publicHead(size);
             skeletonStore.delete(key);
+            // Reset the pageKey's local heat so the next read starts cold: the source query that
+            // rebuilds the skeleton is authoritative for the new page contents, and any accumulated
+            // heat was for the now-stale id list. Duplicate reset (synchronous + delayed) is harmless.
+            hotKeyDetector.reset(key);
         }
     }
 

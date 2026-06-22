@@ -75,6 +75,19 @@ platform:
       reconciliation-interval-ms: ${FEED_RECONCILIATION_INTERVAL_MS:30000}
       single-flight-lock-wait-ms: ${FEED_SINGLE_FLIGHT_LOCK_WAIT_MS:200}
       single-flight-lock-ttl-seconds: ${FEED_SINGLE_FLIGHT_LOCK_TTL_SECONDS:10}
+      hot-key:
+        enabled: ${FEED_HOT_KEY_ENABLED:true}
+        window-seconds: ${FEED_HOT_KEY_WINDOW_SECONDS:60}
+        slice-seconds: ${FEED_HOT_KEY_SLICE_SECONDS:10}
+        max-tracked-keys: ${FEED_HOT_KEY_MAX_TRACKED_KEYS:50000}
+        cold-threshold-ratio: ${FEED_HOT_KEY_COLD_THRESHOLD_RATIO:0.5}
+        low-threshold: ${FEED_HOT_KEY_LOW_THRESHOLD:50}
+        high-threshold: ${FEED_HOT_KEY_HIGH_THRESHOLD:200}
+        base-ttl-seconds: ${FEED_HOT_KEY_BASE_TTL_SECONDS:30}
+        medium-extra-ttl-seconds: ${FEED_HOT_KEY_MEDIUM_EXTRA_TTL_SECONDS:60}
+        high-extra-ttl-seconds: ${FEED_HOT_KEY_HIGH_EXTRA_TTL_SECONDS:120}
+        jitter-min-seconds: ${FEED_HOT_KEY_JITTER_MIN_SECONDS:5}
+        jitter-max-seconds: ${FEED_HOT_KEY_JITTER_MAX_SECONDS:10}
   auth:
     jwt:
       issuer: ${AUTH_JWT_ISSUER:knowledge-platform}

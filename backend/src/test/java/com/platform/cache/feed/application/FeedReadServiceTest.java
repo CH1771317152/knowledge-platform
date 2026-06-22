@@ -20,6 +20,7 @@ import com.platform.cache.feed.domain.FeedPage;
 import com.platform.cache.feed.domain.FeedSourceQuery;
 import com.platform.cache.feed.domain.PostFragment;
 import com.platform.cache.feed.dto.FeedPageResponse;
+import com.platform.cache.feed.hotkey.FeedHotKeyDetector;
 import com.platform.cache.feed.infrastructure.redis.FragmentStore;
 import com.platform.cache.feed.infrastructure.redis.SkeletonStore;
 import com.platform.content.application.ContentQueryService;
@@ -74,6 +75,7 @@ class FeedReadServiceTest {
     private UserQueryService userQueryService;
     private FeedSingleFlight singleFlight;
     private FeedOverlayService overlayService;
+    private FeedHotKeyDetector hotKeyDetector;
 
     private FeedReadService service;
 
@@ -96,7 +98,8 @@ class FeedReadServiceTest {
                 new FeedCacheProperties.L2(5, 60, 10_000),
                 new FeedCacheProperties.L1(4, 120),
                 new FeedCacheProperties.L0(300),
-                0.3, 30_000L, 200, 10);
+                0.3, 30_000L, 200, 10,
+                FeedCacheProperties.HotKey.defaults());
 
         // Pass-through single-flight: runs the supplier directly with no local/distributed dedup.
         // The orchestrator's source-backfill wiring is exercised here; the single-flight's own
@@ -113,10 +116,15 @@ class FeedReadServiceTest {
         // hasActedBatch → likedByMe/favedByMe wiring; individual tests stub the batch call.
         overlayService = new FeedOverlayService(counterReadService);
 
+        // Mocked hot-key detector. Default: ttlFor is a pass-through (returns the base TTL) so the
+        // existing TTL assertions stay intact; individual tests override ttlFor to assert inheritance.
+        hotKeyDetector = mock(FeedHotKeyDetector.class);
+        lenient().when(hotKeyDetector.ttlFor(any(), anyInt())).thenAnswer(inv -> inv.getArgument(1));
+
         service = new FeedReadService(
                 fragmentStore, skeletonStore, sourceQuery, l2CacheManager, props,
                 counterReadService, contentQueryService, userQueryService, singleFlight,
-                overlayService, new ObjectMapper());
+                overlayService, hotKeyDetector, new ObjectMapper());
 
         // Default: NULL-sentinel never set; skeleton empty. Individual tests override.
         lenient().when(skeletonStore.isNullSentinel(any())).thenReturn(false);
@@ -140,6 +148,21 @@ class FeedReadServiceTest {
         verifyNoInteractions(skeletonStore);
         verifyNoInteractions(sourceQuery);
         verifyNoInteractions(fragmentStore);
+    }
+
+    @Test
+    void readPageRecordsPageKeyEvenOnL2Hit() {
+        // Heat is recorded at the very top of readPage, BEFORE the L2 check — so an L2 hit still
+        // counts toward the pageKey's heat. This keeps a page that is well-served by L2 visible to
+        // the hot-key detector (so its L1/L0 TTLs still get extended on rebuild).
+        PostFragment frag = fragment(1L);
+        FeedPageResponse cached = new FeedPageResponse(
+                List.of(item(frag)), true, new Cursor(PUB_AT, 1L));
+        l2CacheManager.getCache("feed-public-head").put(FeedRedisPageKeys.publicHead(20), cached);
+
+        service.readPublicFeed(null, 20, null);
+
+        verify(hotKeyDetector, times(1)).record(FeedRedisPageKeys.publicHead(20));
     }
 
     // --- L1 hit ----------------------------------------------------------
@@ -256,11 +279,14 @@ class FeedReadServiceTest {
         when(counterReadService.getArticleCounters(101L)).thenReturn(counters(101L));
         when(userQueryService.findAccountById(AUTHOR)).thenReturn(account());
 
+        // L0 TTL inherits the pageKey's current heat: the detector maps base 300 → 155 here.
+        when(hotKeyDetector.ttlFor(FeedRedisPageKeys.publicHead(20), 300)).thenReturn(155);
+
         FeedPageResponse result = service.readPublicFeed(null, 20, null);
 
         assertThat(result.items()).extracting("postId").containsExactly(100L, 101L);
-        // Backfilled fragment written to L0 once.
-        verify(fragmentStore, times(1)).put(any(PostFragment.class), eq(300));
+        // Backfilled fragment written to L0 once with the heat-inherited TTL (155, not the base 300).
+        verify(fragmentStore, times(1)).put(any(PostFragment.class), eq(155));
         // The backfilled item carries the metadata + counts sourced from the three services.
         var backfilled = result.items().get(1);
         assertThat(backfilled.title()).isEqualTo("title-101");

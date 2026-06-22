@@ -8,6 +8,7 @@ import com.platform.cache.feed.domain.FeedSourceQuery;
 import com.platform.cache.feed.domain.PostFragment;
 import com.platform.cache.feed.dto.FeedItemResponse;
 import com.platform.cache.feed.dto.FeedPageResponse;
+import com.platform.cache.feed.hotkey.FeedHotKeyDetector;
 import com.platform.cache.feed.infrastructure.redis.FeedRedisKeys;
 import com.platform.cache.feed.infrastructure.redis.FragmentStore;
 import com.platform.cache.feed.infrastructure.redis.SkeletonStore;
@@ -100,6 +101,7 @@ public class FeedReadService {
     private final UserQueryService userQueryService;
     private final FeedSingleFlight singleFlight;
     private final FeedOverlayService overlayService;
+    private final FeedHotKeyDetector hotKeyDetector;
     /** Reserved for Task 10 (event payload decode); see plan. */
     @SuppressWarnings("unused")
     private final ObjectMapper objectMapper;
@@ -114,6 +116,7 @@ public class FeedReadService {
                            UserQueryService userQueryService,
                            FeedSingleFlight singleFlight,
                            FeedOverlayService overlayService,
+                           FeedHotKeyDetector hotKeyDetector,
                            ObjectMapper objectMapper) {
         this.fragmentStore = fragmentStore;
         this.skeletonStore = skeletonStore;
@@ -125,6 +128,7 @@ public class FeedReadService {
         this.userQueryService = userQueryService;
         this.singleFlight = singleFlight;
         this.overlayService = overlayService;
+        this.hotKeyDetector = hotKeyDetector;
         this.objectMapper = objectMapper;
     }
 
@@ -182,6 +186,9 @@ public class FeedReadService {
      */
     private FeedPageResponse readPage(String cacheName, String pageKey, int l1Ttl,
                                       BackfillQuery sourceSupplier) {
+        // 0. Record pageKey heat up front so every read — including L2 hits — counts toward heat.
+        hotKeyDetector.record(pageKey);
+
         // 1. L2 check — a hit avoids all Redis + DB work.
         Cache l2 = l2CacheManager.getCache(cacheName);
         FeedPageResponse cached = readL2(l2, pageKey);
@@ -228,7 +235,7 @@ public class FeedReadService {
         //    point the page has just been re-derived, so any remaining tombstone is a concurrent
         //    delete racing this read; treat it as missing and backfill (the backfill will hit a
         //    DELETED post in the content repo and be skipped, leaving the id un-assembled).
-        fragments = backfillMissing(page.ids(), fragments);
+        fragments = backfillMissing(pageKey, page.ids(), fragments);
 
         // 7. Assemble + promote to L2.
         FeedPageResponse response = assemble(page, fragments);
@@ -243,8 +250,12 @@ public class FeedReadService {
      * counter, and user services, write each into L0, and return the merged map. Ids whose post is
      * gone (soft-deleted, not found) are silently dropped — they will not appear in the assembled
      * page, which is the correct degradation for a stale skeleton whose rebuild already ran.
+     *
+     * <p>The L0 fragment TTL inherits the current pageKey heat via
+     * {@link FeedHotKeyDetector#ttlFor(String, int)} so fragments of a hot page live longer.
      */
-    private Map<Long, PostFragment> backfillMissing(List<Long> ids, Map<Long, PostFragment> present) {
+    private Map<Long, PostFragment> backfillMissing(String pageKey, List<Long> ids,
+                                                    Map<Long, PostFragment> present) {
         List<Long> missing = new ArrayList<>();
         for (Long id : ids) {
             if (!present.containsKey(id)) {
@@ -254,7 +265,7 @@ public class FeedReadService {
         if (missing.isEmpty()) {
             return present;
         }
-        int l0Ttl = props.l0().ttlSeconds();
+        int l0Ttl = hotKeyDetector.ttlFor(pageKey, props.l0().ttlSeconds());
         Map<Long, PostFragment> merged = new LinkedHashMap<>(present);
         for (Long postId : missing) {
             Optional<PostFragment> built = buildFragment(postId);

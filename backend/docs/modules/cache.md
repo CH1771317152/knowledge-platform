@@ -56,8 +56,8 @@
 | 层 | 载体 | 内容 | TTL | 命中省下的开销 |
 | --- | --- | --- | --- | --- |
 | **L2** | Caffeine 本地（`feedL2CacheManager`） | 完整装配的 `FeedPageResponse`（每页键） | head 5s / cursor 60s | 命中即零 Redis、零 DB，直接 overlay 返回 |
-| **L1** | Redis（`skel:{pageKey}`） | 页骨架 `FeedPage`（id 列表 + hasMore + nextCursor） | head 4s / cursor 120s | 命中即省 DB keyset 查询，仍需 L0 multiGet 装配 |
-| **L0** | Redis（`frag:post:{id}`） | 单帖片段 `PostFragment` JSON | 300s | 骨架命中后一次 `MGET` 拿全部片段 |
+| **L1** | Redis（`skel:{pageKey}`） | 页骨架 `FeedPage`（id 列表 + hasMore + nextCursor） | 动态 TTL，默认 base 30s，按 pageKey 热度加 0/60/120s + jitter（见[热 key 探测](#热-key-探测与动态-ttl)） | 命中即省 DB keyset 查询，仍需 L0 multiGet 装配 |
+| **L0** | Redis（`frag:post:{id}`） | 单帖片段 `PostFragment` JSON | 动态 TTL，回填时继承当前 pageKey 热度（`ttlFor(pageKey, l0.ttlSeconds)`） | 骨架命中后一次 `MGET` 拿全部片段 |
 
 > L2 故意短 TTL（head 5s）：它的价值是吸收"极短时间内同一页的重复读"，而非长期缓存；较长的 L1/L0 承担长期命中。
 
@@ -144,6 +144,32 @@ content 模块统一了事件信封（`ContentPostEvent` + `ContentPostEventType
 | **缓存雪崩**（大批 key 同期过期） | TTL 相对抖动：`ttl * (1 + rand(0..jitterRatio))`，`jitterRatio=0.3` | `SkeletonStore.applyJitter` / `FragmentStore.applyJitter`；大批回填后 TTL 落在 `[base, base*1.3]` |
 
 墓碑（30s）+ NULL 哨兵（30s）都用短固定 TTL：只够撑过重建 / 空页窗口，不长期占位。
+
+## 热 key 探测与动态 TTL
+
+Feed 缓存支持本地热 key 探测，用最近一个滑动窗口内的 pageKey 访问次数动态调整 Redis 写入 TTL（`FeedHotKeyDetector`）。
+
+- 只统计 pageKey，不统计 `frag:post:{postId}` —— 片段本身没有"热度"概念，它的 TTL 继承自回填时所在页的 pageKey 热度。
+- L1 skeleton 在 `SkeletonStore.put` 里用 `FeedHotKeyDetector.ttlFor(pageKey, baseTtl)` 算出最终 TTL；热 pageKey 的骨架活得更久。
+- L0 fragment 在 `FeedReadService.backfillMissing` 里同样调 `ttlFor(pageKey, props.l0().ttlSeconds())`，把结果原样传给 `FragmentStore.put`。`FragmentStore` 不再做自己的抖动 —— 抖动由 detector 在 `ttlFor` 里统一加，避免二次抖动。
+- 读请求只更新本地热度计数（`record(pageKey)`），**不刷新 Redis TTL**。Redis TTL 只在写 / 回填时设置一次。
+- 业务失效（`FeedInvalidationConsumer` 删 head 骨架时）调 `reset(pageKey)` 清掉对应 pageKey 的本地热度；自然 TTL 过期**不** reset（detetor 不知道 Redis 那侧何时过期）。
+
+默认窗口为 60 秒、每 10 秒一个时间片（`window-seconds=60`, `slice-seconds=10`，bucket 数 = 6）。每个 pageKey 维护一个 `int[] counts`（每槽一个计数）和 `lastAccessTick`。`@Scheduled` 时间片轮转时：清空即将被复用的槽位、并对连续半个窗口（`coldThresholdTicks = ceil(bucketCount * coldThresholdRatio) = 3`）未访问的 key 直接 evict。还有 `max-tracked-keys`（默认 50_000）作为全局上限，超过则新 key 直接被忽略（保护本地内存）。
+
+热度等级（`FeedHotKeyDetector.ttlFor`）：
+
+| heat（窗口内访问次数） | 等级 | 最终 TTL |
+| --- | --- | --- |
+| `< 50`（`low-threshold`） | 低热度 | `base-ttl-seconds + jitter` |
+| `50 - 200` | 中热度 | `base-ttl-seconds + medium-extra-ttl-seconds(60s) + jitter` |
+| `> 200`（`high-threshold`） | 高热度 | `base-ttl-seconds + high-extra-ttl-seconds(120s) + jitter` |
+
+`base-ttl-seconds` 默认 30s（独立于 `l1.headTtlSeconds` / `l0.ttlSeconds`，专门给热 key 探测用）。`jitter` 在 `[jitter-min-seconds, jitter-max-seconds]`（默认 `[5, 10]`）里取随机整数，用于错开批量回填的过期时间。
+
+> 当 `hot-key.enabled=false` 时，detector 不再 track 任何 key，`ttlFor` 直接返回 `传入的 baseTtl + jitter`（即退化成"无热度的固定 base"），便于灰度关闭。
+
+该机制是**本 JVM 本地优化**，不保证多实例热度一致；它只影响缓存命中率与新鲜度，**不影响业务正确性** —— TTL 长短只决定骨架何时过期回源，骨架内容始终由源查询和对账保证正确。
 
 ## 跨模块依赖
 

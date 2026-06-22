@@ -65,7 +65,8 @@ class FeedSingleFlightTest {
                 new FeedCacheProperties.L2(5, 60, 10_000),
                 new FeedCacheProperties.L1(4, 120),
                 new FeedCacheProperties.L0(300),
-                0.3, 30_000L, 200, 10);
+                0.3, 30_000L, 200, 10,
+                FeedCacheProperties.HotKey.defaults());
     }
 
     // --- Local single-flight ---------------------------------------------------
@@ -81,7 +82,8 @@ class FeedSingleFlightTest {
                 new FeedCacheProperties.L2(5, 60, 10_000),
                 new FeedCacheProperties.L1(4, 120),
                 new FeedCacheProperties.L0(300),
-                0.3, 30_000L, 5_000, 10);
+                0.3, 30_000L, 5_000, 10,
+                FeedCacheProperties.HotKey.defaults());
 
         AtomicInteger supplierCalls = new AtomicInteger();
         // releaseSupplier lets the test control when the builder returns, so the joiner is
@@ -221,7 +223,8 @@ class FeedSingleFlightTest {
                 new FeedCacheProperties.L2(5, 60, 10_000),
                 new FeedCacheProperties.L1(4, 120),
                 new FeedCacheProperties.L0(300),
-                0.3, 30_000L, 5_000, 10);
+                0.3, 30_000L, 5_000, 10,
+                FeedCacheProperties.HotKey.defaults());
 
         FeedSingleFlight singleFlight = new FeedSingleFlight(redis, generousWait);
         ExecutorService pool = Executors.newFixedThreadPool(1);
@@ -307,7 +310,8 @@ class FeedSingleFlightTest {
                 new FeedCacheProperties.L2(5, 60, 10_000),
                 new FeedCacheProperties.L1(4, 120),
                 new FeedCacheProperties.L0(300),
-                0.3, 30_000L, 40, 10);
+                0.3, 30_000L, 40, 10,
+                FeedCacheProperties.HotKey.defaults());
         FeedSingleFlight singleFlight = new FeedSingleFlight(redis, tinyWait);
 
         AtomicInteger calls = new AtomicInteger();

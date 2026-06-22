@@ -2,7 +2,6 @@ package com.platform.cache.feed.infrastructure.redis;
 
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
-import com.platform.cache.feed.config.FeedCacheProperties;
 import com.platform.cache.feed.domain.PostFragment;
 import java.time.Duration;
 import java.util.ArrayList;
@@ -10,7 +9,6 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
-import java.util.concurrent.ThreadLocalRandom;
 import org.springframework.context.annotation.Profile;
 import org.springframework.dao.DataAccessException;
 import org.springframework.data.redis.core.StringRedisTemplate;
@@ -34,9 +32,14 @@ import org.springframework.stereotype.Repository;
  *       skeleton" from "fragment simply expired → backfill and retry".</li>
  * </ul>
  *
- * <p><b>TTL jitter:</b> {@link #put(PostFragment, int)} applies TTL-relative jitter
- * {@code ttl * (1 + rand(0..jitterRatio))} so fragments do not all expire simultaneously after a
- * bulk backfill (anti-stampede). The {@code jitterRatio} comes from {@link FeedCacheProperties#jitterRatio()}.
+ * <p><b>TTL:</b> {@link #put(PostFragment, int)} writes exactly the TTL handed in by the caller —
+ * it does <em>not</em> know the pageKey and therefore cannot compute heat-based TTL itself. The
+ * caller ({@code FeedReadService.backfillMissing}) computes the TTL via
+ * {@link com.platform.cache.feed.hotkey.FeedHotKeyDetector#ttlFor(String, int)
+ * FeedHotKeyDetector.ttlFor(pageKey, baseTtl)}, which already folds in heat-based extra seconds and
+ * anti-stampede jitter. Applying a second layer of jitter here would double-count and is intentionally
+ * avoided. {@link #putTombstone(Long)} still uses a short fixed TTL because tombstones ride out the
+ * rebuild window and do not participate in heat-based TTL.
  *
  * <p><b>Profile:</b> {@code @Profile("!test")} — the unit tests in Tasks 7+ substitute a fake
  * FragmentStore, so the Redis-backed bean must stay out of the {@code test} profile to keep
@@ -51,14 +54,11 @@ public class FragmentStore {
 
     private final StringRedisTemplate template;
     private final ObjectMapper objectMapper;
-    private final FeedCacheProperties props;
 
     public FragmentStore(StringRedisTemplate template,
-                         ObjectMapper objectMapper,
-                         FeedCacheProperties props) {
+                         ObjectMapper objectMapper) {
         this.template = template;
         this.objectMapper = objectMapper;
-        this.props = props;
     }
 
     /**
@@ -139,15 +139,16 @@ public class FragmentStore {
     }
 
     /**
-     * Writes {@code fragment} with {@code ttlSeconds} + relative jitter. Pass the base L0 TTL
-     * ({@code props.l0().ttlSeconds()}) for normal backfill; the backfill orchestrator may pass a
-     * smaller value when refreshing hot fragments.
+     * Writes {@code fragment} with <em>exactly</em> {@code ttlSeconds} — no jitter is applied here.
+     * The caller is expected to compute {@code ttlSeconds} via
+     * {@link com.platform.cache.feed.hotkey.FeedHotKeyDetector#ttlFor(String, int)
+     * FeedHotKeyDetector.ttlFor(pageKey, baseTtl)}, which adds heat-based extra seconds and jitter.
+     * Keeping this method a thin writer means FragmentStore does not need to know the pageKey.
      */
     public void put(PostFragment fragment, int ttlSeconds) {
         String json = serialize(fragment);
-        int ttlWithJitter = applyJitter(ttlSeconds);
         template.opsForValue().set(FeedRedisKeys.fragment(fragment.postId()), json,
-                Duration.ofSeconds(ttlWithJitter));
+                Duration.ofSeconds(ttlSeconds));
     }
 
     /**
@@ -185,19 +186,5 @@ public class FragmentStore {
         } catch (JsonProcessingException e) {
             throw new IllegalStateException("Failed to serialize fragment for post " + fragment.postId(), e);
         }
-    }
-
-    /**
-     * TTL-relative jitter: {@code ttl * (1 + rand(0..jitterRatio))}. With {@code jitterRatio=0.3}
-     * and {@code ttl=300}, the effective TTL falls in [300, 390]. Bounded so a stampede of backfills
-     * (e.g. on cold start) does not all expire on the same tick.
-     */
-    private int applyJitter(int ttlSeconds) {
-        double ratio = props.jitterRatio();
-        if (ratio <= 0.0) {
-            return ttlSeconds;
-        }
-        double jitter = ThreadLocalRandom.current().nextDouble(ratio);
-        return ttlSeconds + (int) Math.round(ttlSeconds * jitter);
     }
 }

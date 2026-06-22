@@ -204,7 +204,7 @@ class FragmentStoreIntegrationTest {
     }
 
     @Test
-    void putAppliesPositiveTtlWithJitter() {
+    void putWritesExactlyTheCallerProvidedTtl() {
         long pid = uniquePostId();
         int baseTtl = props.l0().ttlSeconds();
 
@@ -212,11 +212,26 @@ class FragmentStoreIntegrationTest {
 
         Long ttlSeconds = template.getExpire(FeedRedisKeys.fragment(pid));
         assertThat(ttlSeconds).as("fragment must have a positive TTL").isPositive();
-        // Jitter extends the TTL by at most jitterRatio; allow a small slack for the time between
-        // SET and getExpire.
-        long upperBound = (long) Math.ceil(baseTtl * (1.0 + props.jitterRatio())) + 5L;
-        assertThat(ttlSeconds).as("TTL with jitter must not exceed base*(1+jitter)+slack")
-                .isLessThanOrEqualTo(upperBound);
+        // FragmentStore is now a thin writer: no jitter is applied here (the caller computes the
+        // heat-aware TTL via FeedHotKeyDetector). The observed TTL must fall in (base - slack, base].
+        assertThat(ttlSeconds).as("TTL must not exceed caller-provided base + small slack")
+                .isLessThanOrEqualTo((long) baseTtl + 5L);
+        assertThat(ttlSeconds).as("TTL must not be significantly below the caller-provided base")
+                .isGreaterThan((long) baseTtl - 5L);
+    }
+
+    @Test
+    void putUsesCallerProvidedTtl() {
+        long pid = uniquePostId();
+
+        store.put(sample(pid), 155);
+
+        Long ttlSeconds = template.getExpire(FeedRedisKeys.fragment(pid));
+        assertThat(ttlSeconds).as("fragment must have a positive TTL").isPositive();
+        // FragmentStore intentionally does not know pageKey; it writes exactly the TTL handed in by
+        // the caller. Allow a small slack for jitter / SET-to-getExpire latency.
+        assertThat(ttlSeconds).as("TTL must respect caller-provided value + small slack")
+                .isLessThanOrEqualTo(155L + 5L);
     }
 
     @Test

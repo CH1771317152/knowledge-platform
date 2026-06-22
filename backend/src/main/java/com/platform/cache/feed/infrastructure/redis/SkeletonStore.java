@@ -4,9 +4,9 @@ import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.platform.cache.feed.config.FeedCacheProperties;
 import com.platform.cache.feed.domain.FeedPage;
+import com.platform.cache.feed.hotkey.FeedHotKeyDetector;
 import java.time.Duration;
 import java.util.Optional;
-import java.util.concurrent.ThreadLocalRandom;
 import org.springframework.context.annotation.Profile;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.stereotype.Repository;
@@ -23,9 +23,10 @@ import org.springframework.stereotype.Repository;
  * same as an absent skeleton (returns {@link Optional#empty()}); the orchestrator uses
  * {@link #isNullSentinel(String)} to distinguish "cached empty" from "not cached".
  *
- * <p><b>TTL jitter:</b> {@link #put(String, FeedPage, int)} applies TTL-relative jitter
- * {@code ttl * (1 + rand(0..jitterRatio))} so skeletons do not all expire simultaneously after a
- * bulk rebuild (anti-stampede). The {@code jitterRatio} comes from {@link FeedCacheProperties#jitterRatio()}.
+ * <p><b>TTL:</b> {@link #put(String, FeedPage, int)} delegates TTL calculation to
+ * {@link FeedHotKeyDetector#ttlFor(String, int)} so skeletons for hot pageKeys live longer than
+ * cold ones (and pick up anti-stampede jitter). When hot-key detection is disabled the detector
+ * falls back to the passed-in {@code ttlSeconds}.
  *
  * <p><b>Profile:</b> {@code @Profile("!test")} — the unit tests in Tasks 7+ substitute a fake
  * SkeletonStore, so the Redis-backed bean must stay out of the {@code test} profile to keep
@@ -44,13 +45,16 @@ public class SkeletonStore {
     private final StringRedisTemplate template;
     private final ObjectMapper objectMapper;
     private final FeedCacheProperties props;
+    private final FeedHotKeyDetector hotKeyDetector;
 
     public SkeletonStore(StringRedisTemplate template,
                          ObjectMapper objectMapper,
-                         FeedCacheProperties props) {
+                         FeedCacheProperties props,
+                         FeedHotKeyDetector hotKeyDetector) {
         this.template = template;
         this.objectMapper = objectMapper;
         this.props = props;
+        this.hotKeyDetector = hotKeyDetector;
     }
 
     /**
@@ -81,13 +85,15 @@ public class SkeletonStore {
     }
 
     /**
-     * Writes {@code page} with {@code ttlSeconds} + relative jitter. Pass the base L1 TTL
+     * Writes {@code page} with a TTL derived from the pageKey's current heat
+     * ({@link FeedHotKeyDetector#ttlFor(String, int)}). Pass the base L1 TTL
      * ({@code props.l1().headTtlSeconds()} / {@code props.l1().cursorTtlSeconds()}) for normal
-     * skeleton caching.
+     * skeleton caching; the detector may extend it with heat-based extra seconds + jitter, or —
+     * when hot-key detection is disabled — fall back to exactly {@code ttlSeconds}.
      */
     public void put(String pageKey, FeedPage page, int ttlSeconds) {
         String json = serialize(page);
-        int ttlWithJitter = applyJitter(ttlSeconds);
+        int ttlWithJitter = hotKeyDetector.ttlFor(pageKey, ttlSeconds);
         template.opsForValue().set(FeedRedisKeys.skeleton(pageKey), json,
                 Duration.ofSeconds(ttlWithJitter));
     }
@@ -126,20 +132,5 @@ public class SkeletonStore {
         } catch (JsonProcessingException e) {
             throw new IllegalStateException("Failed to serialize skeleton for page", e);
         }
-    }
-
-    /**
-     * TTL-relative jitter: {@code ttl * (1 + rand(0..jitterRatio))}. With {@code jitterRatio=0.3}
-     * and {@code ttl=300}, the effective TTL falls in [300, 390]. Same formula as
-     * {@link FragmentStore#applyJitter(int)}; kept duplicated rather than shared to keep each store
-     * self-contained and the redis package free of an extra helper bean.
-     */
-    private int applyJitter(int ttlSeconds) {
-        double ratio = props.jitterRatio();
-        if (ratio <= 0.0) {
-            return ttlSeconds;
-        }
-        double jitter = ThreadLocalRandom.current().nextDouble(ratio);
-        return ttlSeconds + (int) Math.round(ttlSeconds * jitter);
     }
 }
