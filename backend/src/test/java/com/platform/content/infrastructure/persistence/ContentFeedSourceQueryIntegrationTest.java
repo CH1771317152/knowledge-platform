@@ -195,7 +195,7 @@ class ContentFeedSourceQueryIntegrationTest {
 
     private void saveDraft(Long id, String clientRequestId) {
         ContentPost draft = new ContentPost(id, authorId, clientRequestId, "T-" + clientRequestId, null,
-                null, PostStatus.DRAFT, PostVisibility.PRIVATE, PublishStage.DRAFT_CREATED, null, null, null);
+                null, PostStatus.DRAFT, PostVisibility.PRIVATE, PublishStage.DRAFT_CREATED, null, null, null, 0L);
         ContentPostBody body = new ContentPostBody(id, PostBodyFormat.MARKDOWN, null, null, null, null,
                 0L, 1, null, null, null, null);
         repository.saveDraft(draft, body);

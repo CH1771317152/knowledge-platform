@@ -16,7 +16,7 @@ import com.platform.content.dto.CreateDraftRequest;
 import com.platform.content.dto.PostFileRequest;
 import com.platform.content.dto.PostPublishingStateResponse;
 import com.platform.content.dto.UpdatePostMetadataRequest;
-import com.platform.content.event.ContentPostEvent;
+import com.platform.content.event.ContentPostEventType;
 import com.platform.content.infrastructure.id.ContentIdGenerator;
 import com.platform.content.repository.ContentPostRepository;
 import com.platform.storage.application.ObjectStorageService;
@@ -34,8 +34,6 @@ import java.util.HexFormat;
 import java.util.List;
 import java.util.Objects;
 import java.util.Optional;
-import java.util.UUID;
-import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.context.annotation.Profile;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -86,16 +84,16 @@ public class ContentCommandService {
     private final ContentPostRepository repository;
     private final ContentIdGenerator contentIdGenerator;
     private final ObjectStorageService objectStorageService;
-    private final ApplicationEventPublisher applicationEventPublisher;
+    private final ContentOutboxAppender outboxAppender;
 
     public ContentCommandService(ContentPostRepository repository,
                                  ContentIdGenerator contentIdGenerator,
                                  ObjectStorageService objectStorageService,
-                                 ApplicationEventPublisher applicationEventPublisher) {
+                                 ContentOutboxAppender outboxAppender) {
         this.repository = repository;
         this.contentIdGenerator = contentIdGenerator;
         this.objectStorageService = objectStorageService;
-        this.applicationEventPublisher = applicationEventPublisher;
+        this.outboxAppender = outboxAppender;
     }
 
     // --- stage 1: create draft ------------------------------------------------
@@ -122,7 +120,7 @@ public class ContentCommandService {
         ContentPost post = new ContentPost(
                 id, authorId, clientRequestId, null, null, null,
                 PostStatus.DRAFT, PostVisibility.PRIVATE, PublishStage.DRAFT_CREATED,
-                null, null, null);
+                null, null, null, 0L);
         ContentPostBody body = new ContentPostBody(
                 id, PostBodyFormat.MARKDOWN, null, null, null, null, null,
                 1, null, null, null, null);
@@ -327,23 +325,19 @@ public class ContentCommandService {
         repository.updateStatusAndStage(
                 postId, post.status(), PublishStage.METADATA_COMPLETED, post.publishedAt());
 
-        String eventId = UUID.randomUUID().toString();
-        LocalDateTime at = LocalDateTime.now();
-        applicationEventPublisher.publishEvent(
-                ContentPostEvent.edited(eventId, postId, post.authorId(), at));
+        // Bump source_version and re-read so the outbox event carries the current post state
+        // (status + visibility + the new monotonically increasing source version) for downstream
+        // search indexing. Two events on a visibility change so they are independently dedup-able.
+        repository.bumpSourceVersion(postId);
+        ContentPost afterMetadata = refetch(postId);
+        LocalDateTime metadataAt = LocalDateTime.now();
+        outboxAppender.append(afterMetadata, ContentPostEventType.POST_EDITED, metadataAt);
         if (visibilityChanged) {
-            // Separate eventId so the two events are independently dedup-able downstream; the
-            // counter reconciliation ledger keys on (eventId, eventType).
-            applicationEventPublisher.publishEvent(ContentPostEvent.visibilityChanged(
-                    UUID.randomUUID().toString(),
-                    postId,
-                    post.authorId(),
-                    LocalDateTime.now(),
-                    oldVisibility.name(),
-                    newVisibility.name()));
+            outboxAppender.append(afterMetadata, ContentPostEventType.POST_VISIBILITY_CHANGED,
+                    LocalDateTime.now());
         }
 
-        return PublishingStateBuilder.build(refetch(postId), repository.findBodyByPostId(postId));
+        return PublishingStateBuilder.build(afterMetadata, repository.findBodyByPostId(postId));
     }
 
     // --- stage 5: publish -----------------------------------------------------
@@ -384,12 +378,11 @@ public class ContentCommandService {
         repository.updateStatusAndStage(postId, PostStatus.PUBLISHED, PublishStage.PUBLISHED, publishedAt);
 
         if (firstPublish) {
-            // In-process event; the Kafka publisher (gated by @Profile) forwards it after commit.
-            applicationEventPublisher.publishEvent(ContentPostEvent.published(
-                    UUID.randomUUID().toString(),
-                    postId,
-                    post.authorId(),
-                    LocalDateTime.now()));
+            // Bump source_version + re-read so the outbox event carries the post's now-PUBLISHED
+            // state. The outbox relay forwards the naked JSON to content-events after commit.
+            repository.bumpSourceVersion(postId);
+            ContentPost published = refetch(postId);
+            outboxAppender.append(published, ContentPostEventType.POST_PUBLISHED, LocalDateTime.now());
         }
 
         return PublishingStateBuilder.build(refetch(postId), Optional.of(body));
@@ -411,13 +404,11 @@ public class ContentCommandService {
         if (post.status() == PostStatus.PUBLISHED) {
             repository.updateStatusAndStage(
                     postId, PostStatus.DRAFT, PublishStage.METADATA_COMPLETED, post.publishedAt());
-            // In-process event; the Kafka publisher forwards it after commit so the counter can
-            // decrement the author's posts_count.
-            applicationEventPublisher.publishEvent(ContentPostEvent.unpublished(
-                    UUID.randomUUID().toString(),
-                    postId,
-                    post.authorId(),
-                    LocalDateTime.now()));
+            // Bump + re-read so the outbox event reflects the now-DRAFT state; the relay forwards it
+            // to content-events so counter/feed/search react to the unpublish.
+            repository.bumpSourceVersion(postId);
+            ContentPost unpublished = refetch(postId);
+            outboxAppender.append(unpublished, ContentPostEventType.POST_UNPUBLISHED, LocalDateTime.now());
         } else if (post.status() == PostStatus.DRAFT) {
             // Idempotent: already a draft. No event.
         } else {
@@ -442,15 +433,15 @@ public class ContentCommandService {
     public PostPublishingStateResponse delete(Long authorId, Long postId) {
         // loadOwnedNonDeletedPost already rejects a DELETED post (CONTENT_ALREADY_DELETED), so
         // delete() is never invoked on an already-deleted post. softDelete + event is the only path.
-        ContentPost post = loadOwnedNonDeletedPost(authorId, postId);
+        loadOwnedNonDeletedPost(authorId, postId);
 
         repository.softDelete(postId);
-        applicationEventPublisher.publishEvent(ContentPostEvent.deleted(
-                UUID.randomUUID().toString(),
-                postId,
-                post.authorId(),
-                LocalDateTime.now()));
-        return PublishingStateBuilder.build(refetch(postId), repository.findBodyByPostId(postId));
+        // Bump + re-read so the outbox event carries the DELETED state; the relay forwards it so
+        // counter/feed/search remove the post from their read models.
+        repository.bumpSourceVersion(postId);
+        ContentPost deleted = refetch(postId);
+        outboxAppender.append(deleted, ContentPostEventType.POST_DELETED, LocalDateTime.now());
+        return PublishingStateBuilder.build(deleted, repository.findBodyByPostId(postId));
     }
 
     // --- helpers --------------------------------------------------------------

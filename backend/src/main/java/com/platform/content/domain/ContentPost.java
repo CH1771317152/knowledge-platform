@@ -14,5 +14,6 @@ public record ContentPost(
         PublishStage publishStage,
         LocalDateTime publishedAt,
         LocalDateTime createdAt,
-        LocalDateTime updatedAt
+        LocalDateTime updatedAt,
+        long sourceVersion
 ) {}

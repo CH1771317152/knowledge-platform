@@ -1,0 +1,72 @@
+{
+  "settings": {
+    "analysis": {
+      "analyzer": {
+        "ik_index_analyzer": {
+          "type": "custom",
+          "tokenizer": "ik_max_word"
+        },
+        "ik_search_analyzer": {
+          "type": "custom",
+          "tokenizer": "ik_smart"
+        }
+      }
+    }
+  },
+  "mappings": {
+    "_source": {
+      "excludes": ["body_text"]
+    },
+    "properties": {
+      "post_id": { "type": "long" },
+      "content_type": { "type": "keyword" },
+      "status": { "type": "keyword" },
+      "visibility": { "type": "keyword" },
+      "author_id": { "type": "long" },
+      "author_name": {
+        "type": "text",
+        "analyzer": "ik_index_analyzer",
+        "search_analyzer": "ik_search_analyzer",
+        "fields": { "keyword": { "type": "keyword", "ignore_above": 128 } }
+      },
+      "author_avatar": { "type": "keyword", "ignore_above": 512 },
+      "title": {
+        "type": "text",
+        "analyzer": "ik_index_analyzer",
+        "search_analyzer": "ik_search_analyzer",
+        "fields": { "keyword": { "type": "keyword", "ignore_above": 256 } }
+      },
+      "description": {
+        "type": "text",
+        "analyzer": "ik_index_analyzer",
+        "search_analyzer": "ik_search_analyzer"
+      },
+      "body_text": {
+        "type": "text",
+        "analyzer": "ik_index_analyzer",
+        "search_analyzer": "ik_search_analyzer"
+      },
+      "cover_object_key": { "type": "keyword", "ignore_above": 512 },
+      "tags": {
+        "type": "keyword",
+        "fields": {
+          "text": {
+            "type": "text",
+            "analyzer": "ik_index_analyzer",
+            "search_analyzer": "ik_search_analyzer"
+          }
+        }
+      },
+      "tags_json": { "type": "flattened" },
+      "publish_time": { "type": "date" },
+      "update_time": { "type": "date" },
+      "like_count": { "type": "long" },
+      "favorite_count": { "type": "long" },
+      "view_count": { "type": "long" },
+      "comment_count": { "type": "long" },
+      "share_count": { "type": "long" },
+      "source_version": { "type": "long" },
+      "indexed_at": { "type": "date" }
+    }
+  }
+}

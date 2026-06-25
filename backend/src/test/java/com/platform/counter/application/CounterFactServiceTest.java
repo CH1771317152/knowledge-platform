@@ -61,7 +61,8 @@ class CounterFactServiceTest {
                 .thenReturn(CompletableFuture.completedFuture(null));
         CounterProperties properties = new CounterProperties(
                 new CounterProperties.Kafka(
-                        EVENTS_TOPIC, "counter-retry", "counter-dlq", "cg", "rcg", "crg", "content-events", "ccg"),
+                        EVENTS_TOPIC, "counter-retry", "counter-dlq", "cg", "rcg", "crg", "content-events", "ccg",
+                        "counter-snapshot-events", "counter-snapshot-relay-group"),
                 new CounterProperties.Flush("adaptive", 1000L, 500L, 5000L, 1000));
         service = new CounterFactService(store, kafkaTemplate, objectMapper, properties);
     }

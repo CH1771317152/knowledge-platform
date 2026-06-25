@@ -2,7 +2,12 @@ package com.platform.counter.application;
 
 import com.platform.counter.config.CounterProperties;
 import com.platform.counter.domain.CounterEntityType;
+import com.platform.counter.dto.ArticleCountersResponse;
+import com.platform.counter.event.CounterSnapshotEvent;
+import com.platform.counter.repository.CounterSnapshotOutboxRepository;
+import java.time.LocalDateTime;
 import java.util.List;
+import java.util.UUID;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.context.annotation.Profile;
@@ -16,6 +21,12 @@ import org.springframework.stereotype.Component;
  * the real cadence is governed by {@code effectiveIntervalMs()}, which is either the configured
  * fixed interval or an adaptive interval interpolated from the pending-agg load (v1: linear between
  * {@code lo}/{@code hi} pending thresholds mapping to {@code maxIntervalMs}/{@code minIntervalMs}).
+ *
+ * <p>After each successful ARTICLE flush, a counter snapshot is appended to the snapshot outbox so
+ * the independent {@code CounterSnapshotRelay} can publish it to {@code counter-snapshot-events} and
+ * Search can keep its ES heat fields in sync. The snapshot is read AFTER {@code flushOne} so it
+ * reflects the just-persisted CountInt state. Only ARTICLE entities are snapshotted — non-article
+ * entities (e.g. USER follow counts) are not part of the search ranking signal.
  *
  * <p>Gated with {@code @Profile("!test & !integration")} so no live {@code @Scheduled} task ever
  * fires in automated tests; unit tests construct the scheduler directly with a fake
@@ -33,12 +44,19 @@ public class CounterFlushScheduler {
 
     private final CounterStore store;
     private final CounterProperties properties;
+    private final CounterReadService counterReadService;
+    private final CounterSnapshotOutboxRepository snapshotOutbox;
 
     private volatile long lastFlush = 0L;
 
-    public CounterFlushScheduler(CounterStore store, CounterProperties properties) {
+    public CounterFlushScheduler(CounterStore store,
+                                 CounterProperties properties,
+                                 CounterReadService counterReadService,
+                                 CounterSnapshotOutboxRepository snapshotOutbox) {
         this.store = store;
         this.properties = properties;
+        this.counterReadService = counterReadService;
+        this.snapshotOutbox = snapshotOutbox;
     }
 
     /**
@@ -82,6 +100,10 @@ public class CounterFlushScheduler {
      * Drains up to {@code batchSize} pending agg tags (e.g. {@code "ARTICLE:123"}) and flushes each
      * into its CountInt. A single malformed tag is logged and skipped — the tag is already drained
      * from the agg set, so reconciliation (TODO) recovers it; the rest of the batch still flushes.
+     *
+     * <p>After a successful ARTICLE flush, a counter snapshot is appended to the snapshot outbox. A
+     * snapshot failure is logged and swallowed: the flush itself already succeeded, and the next
+     * flush of the same entity will produce a fresh snapshot, so a single miss is self-healing.
      */
     void flushPendingBatch() {
         List<String> tags = store.drainPendingBatch(properties.flush().batchSize());
@@ -91,9 +113,30 @@ public class CounterFlushScheduler {
                 CounterEntityType etype = CounterEntityType.valueOf(tag.substring(0, sep));
                 Long eid = Long.valueOf(tag.substring(sep + 1));
                 store.flushOne(etype, eid);
+                snapshotAfterFlush(etype, eid);
             } catch (Exception e) {
                 log.warn("Skipping malformed counter agg tag during flush: '{}' ({})", tag, e.getMessage());
             }
+        }
+    }
+
+    /**
+     * Reads the just-flushed ARTICLE counters and appends a snapshot row. Only ARTICLE entities are
+     * snapshotted — Search only ranks articles, and snapshotting every entity type would flood the
+     * outbox with unrankable noise.
+     */
+    private void snapshotAfterFlush(CounterEntityType etype, Long eid) {
+        if (etype != CounterEntityType.ARTICLE) {
+            return;
+        }
+        try {
+            ArticleCountersResponse counters = counterReadService.getArticleCounters(eid);
+            snapshotOutbox.append(CounterSnapshotEvent.article(
+                    UUID.randomUUID().toString(), counters, LocalDateTime.now()));
+        } catch (Exception e) {
+            // The flush already succeeded; a snapshot miss is non-fatal and self-healing on the next
+            // flush of the same entity.
+            log.warn("Failed to append counter snapshot for {}:{} ({})", etype, eid, e.getMessage());
         }
     }
 }

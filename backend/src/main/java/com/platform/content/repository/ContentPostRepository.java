@@ -47,7 +47,21 @@ public interface ContentPostRepository {
 
     void softDelete(Long postId);
 
+    /**
+     * Atomically increments the post's {@code source_version}. Called within the same transaction as
+     * a lifecycle mutation so the re-read post carries a monotonically increasing version that the
+     * content outbox event then carries to downstream search indexing.
+     */
+    void bumpSourceVersion(Long postId);
+
     List<ContentPost> findPublicPublished(int limit, long offset);
 
     List<ContentPost> findByAuthor(Long authorId, int limit, long offset);
+
+    /**
+     * Keyset scan of all public published posts, strictly ascending by {@code id}, for index rebuild.
+     * Pagination uses {@code (id > afterId)} rather than offset so the scan stays stable while posts
+     * are concurrently published. The caller advances {@code afterId} to the last returned post's id.
+     */
+    List<ContentPost> findPublicPublishedAfterId(Long afterId, int limit);
 }

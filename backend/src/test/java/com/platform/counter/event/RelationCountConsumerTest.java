@@ -72,7 +72,8 @@ class RelationCountConsumerTest {
                         EVENTS_TOPIC, RETRY_TOPIC, DLQ_TOPIC,
                         CONSUMER_GROUP, RETRY_CONSUMER_GROUP,
                         RELATION_CONSUMER_GROUP, "content-events",
-                        CounterEventTopics.CONTENT_CONSUMER_GROUP),
+                        CounterEventTopics.CONTENT_CONSUMER_GROUP,
+                        "counter-snapshot-events", "counter-snapshot-relay-group"),
                 new CounterProperties.Flush("adaptive", 1000L, 500L, 5000L, 1000));
         consumer = new RelationCountConsumer(
                 consumedRepo, store, kafkaTemplate, objectMapper, properties);

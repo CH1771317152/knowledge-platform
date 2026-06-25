@@ -443,7 +443,7 @@ class FeedReadServiceTest {
                 com.platform.content.domain.PostStatus.PUBLISHED,
                 com.platform.content.domain.PostVisibility.PUBLIC,
                 com.platform.content.domain.PublishStage.PUBLISHED,
-                PUB_AT, PUB_AT.minusDays(1), PUB_AT.minusDays(1));
+                PUB_AT, PUB_AT.minusDays(1), PUB_AT.minusDays(1), 0L);
     }
 
     private static ArticleCountersResponse counters(long postId) {

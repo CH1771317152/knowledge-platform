@@ -38,7 +38,7 @@ public interface ContentPostMapper {
 
     @Select("""
             SELECT id, author_id, client_request_id, title, summary, cover_object_key,
-                status, visibility, publish_stage, published_at, created_at, updated_at
+                status, visibility, publish_stage, published_at, created_at, updated_at, source_version
             FROM content_post
             WHERE id = #{postId}
             """)
@@ -49,13 +49,14 @@ public interface ContentPostMapper {
             @Result(column = "publish_stage", property = "publishStage"),
             @Result(column = "published_at", property = "publishedAt"),
             @Result(column = "created_at", property = "createdAt"),
-            @Result(column = "updated_at", property = "updatedAt")
+            @Result(column = "updated_at", property = "updatedAt"),
+            @Result(column = "source_version", property = "sourceVersion")
     })
     Optional<ContentPostRow> findPostById(@Param("postId") Long postId);
 
     @Select("""
             SELECT id, author_id, client_request_id, title, summary, cover_object_key,
-                status, visibility, publish_stage, published_at, created_at, updated_at
+                status, visibility, publish_stage, published_at, created_at, updated_at, source_version
             FROM content_post
             WHERE author_id = #{authorId} AND client_request_id = #{clientRequestId}
             """)
@@ -221,9 +222,12 @@ public interface ContentPostMapper {
     @Update("UPDATE content_post SET status = 'DELETED' WHERE id = #{postId}")
     int softDelete(@Param("postId") Long postId);
 
+    @Update("UPDATE content_post SET source_version = source_version + 1 WHERE id = #{postId}")
+    int bumpSourceVersion(@Param("postId") Long postId);
+
     @Select("""
             SELECT id, author_id, client_request_id, title, summary, cover_object_key,
-                status, visibility, publish_stage, published_at, created_at, updated_at
+                status, visibility, publish_stage, published_at, created_at, updated_at, source_version
             FROM content_post
             WHERE status = 'PUBLISHED' AND visibility = 'PUBLIC'
             ORDER BY published_at DESC
@@ -232,9 +236,22 @@ public interface ContentPostMapper {
     @ResultMap("contentPostResult")
     List<ContentPostRow> findPublicPublished(@Param("limit") int limit, @Param("offset") long offset);
 
+    // Keyset scan for index rebuild: strictly ascending by id, only public+published rows. Stable under
+    // concurrent publishes because the scan window moves forward by id, not by a volatile offset.
     @Select("""
             SELECT id, author_id, client_request_id, title, summary, cover_object_key,
-                status, visibility, publish_stage, published_at, created_at, updated_at
+                status, visibility, publish_stage, published_at, created_at, updated_at, source_version
+            FROM content_post
+            WHERE status = 'PUBLISHED' AND visibility = 'PUBLIC' AND id > #{afterId}
+            ORDER BY id ASC
+            LIMIT #{limit}
+            """)
+    @ResultMap("contentPostResult")
+    List<ContentPostRow> findPublicPublishedAfterId(@Param("afterId") Long afterId, @Param("limit") int limit);
+
+    @Select("""
+            SELECT id, author_id, client_request_id, title, summary, cover_object_key,
+                status, visibility, publish_stage, published_at, created_at, updated_at, source_version
             FROM content_post
             WHERE author_id = #{authorId} AND status <> 'DELETED'
             ORDER BY created_at DESC

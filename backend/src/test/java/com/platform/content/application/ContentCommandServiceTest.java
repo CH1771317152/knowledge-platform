@@ -20,9 +20,10 @@ import com.platform.content.dto.CreateDraftRequest;
 import com.platform.content.dto.PostFileRequest;
 import com.platform.content.dto.PostPublishingStateResponse;
 import com.platform.content.dto.UpdatePostMetadataRequest;
-import com.platform.content.event.ContentPostEvent;
+import com.platform.content.event.ContentOutboxEvent;
 import com.platform.content.event.ContentPostEventType;
 import com.platform.content.infrastructure.id.ContentIdGenerator;
+import com.platform.content.repository.ContentOutboxRepository;
 import com.platform.content.repository.ContentPostRepository;
 import com.platform.storage.infrastructure.FakeObjectStorageService;
 import java.nio.charset.StandardCharsets;
@@ -37,7 +38,6 @@ import java.util.Map;
 import java.util.Optional;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
-import org.springframework.context.ApplicationEventPublisher;
 
 /**
  * Pure unit test for {@link ContentCommandService}. The service is constructed directly with an
@@ -55,7 +55,7 @@ class ContentCommandServiceTest {
     private FakeContentPostRepository repository;
     private SequenceContentIdGenerator idGenerator;
     private FakeObjectStorageService objectStorage;
-    private RecordingEventPublisher eventPublisher;
+    private RecordingOutboxRepository outbox;
     private ContentCommandService service;
 
     @BeforeEach
@@ -63,8 +63,9 @@ class ContentCommandServiceTest {
         repository = new FakeContentPostRepository();
         idGenerator = new SequenceContentIdGenerator();
         objectStorage = new FakeObjectStorageService();
-        eventPublisher = new RecordingEventPublisher();
-        service = new ContentCommandService(repository, idGenerator, objectStorage, eventPublisher);
+        outbox = new RecordingOutboxRepository();
+        ContentOutboxAppender appender = new ContentOutboxAppender(outbox);
+        service = new ContentCommandService(repository, idGenerator, objectStorage, appender);
     }
 
     // --- createDraft ----------------------------------------------------------
@@ -546,40 +547,40 @@ class ContentCommandServiceTest {
     @Test
     void publishEmitsPostPublishedEventOnFirstPublish() {
         Long postId = fullyPreparedPost(AUTHOR);
-        // fullyPreparedPost runs updateMetadata once, which emits POST_EDITED (+ VISIBILITY_CHANGED
+        // fullyPreparedPost runs updateMetadata once, which appends POST_EDITED (+ VISIBILITY_CHANGED
         // if visibility changed). Clear the recorder so we assert only on the publish transition.
-        eventPublisher.published.clear();
+        outbox.events.clear();
 
         service.publish(AUTHOR, postId);
 
-        // Exactly one ContentPostEvent (POST_PUBLISHED) on the real first-publish transition.
-        assertThat(eventPublisher.published).hasSize(1);
-        ContentPostEvent event = (ContentPostEvent) eventPublisher.published.get(0);
-        assertThat(event.eventType()).isEqualTo(ContentPostEventType.POST_PUBLISHED);
-        assertThat(event.postId()).isEqualTo(postId);
-        assertThat(event.authorId()).isEqualTo(AUTHOR);
+        // Exactly one outbox event (POST_PUBLISHED) on the real first-publish transition.
+        assertThat(outbox.events).hasSize(1);
+        ContentOutboxEvent event = outbox.events.get(0);
+        assertThat(event.eventType()).isEqualTo(ContentPostEventType.POST_PUBLISHED.name());
+        assertThat(event.aggregateId()).isEqualTo(postId);
         assertThat(event.eventId()).isNotBlank();
         assertThat(event.occurredAt()).isNotNull();
-        assertThat(event.changes()).isEmpty();
+        // The naked-JSON payload carries the post's current state (authorId, status, visibility).
+        assertThat(event.payloadJson()).contains("\"authorId\":" + AUTHOR);
+        assertThat(event.payloadJson()).contains("\"status\":\"PUBLISHED\"");
 
-        // Idempotent re-publish MUST NOT emit a second event.
+        // Idempotent re-publish MUST NOT append a second event.
         service.publish(AUTHOR, postId);
-        assertThat(eventPublisher.published).hasSize(1);
+        assertThat(outbox.events).hasSize(1);
     }
 
     @Test
     void unpublishEmitsPostUnpublishedEvent() {
         Long postId = fullyPreparedPost(AUTHOR);
         service.publish(AUTHOR, postId);
-        eventPublisher.published.clear();
+        outbox.events.clear();
 
         service.unpublish(AUTHOR, postId);
 
         assertThat(eventsOfType(ContentPostEventType.POST_UNPUBLISHED)).hasSize(1);
-        ContentPostEvent event = singleOf(ContentPostEventType.POST_UNPUBLISHED);
-        assertThat(event.postId()).isEqualTo(postId);
-        assertThat(event.authorId()).isEqualTo(AUTHOR);
-        assertThat(event.changes()).isEmpty();
+        ContentOutboxEvent event = singleOf(ContentPostEventType.POST_UNPUBLISHED);
+        assertThat(event.aggregateId()).isEqualTo(postId);
+        assertThat(event.payloadJson()).contains("\"authorId\":" + AUTHOR);
     }
 
     @Test
@@ -587,12 +588,12 @@ class ContentCommandServiceTest {
         Long postId = fullyPreparedPost(AUTHOR);
         // fullyPreparedPost leaves the post at METADATA_COMPLETED, status DRAFT (never published).
         assertThat(repository.findPostById(postId).orElseThrow().status()).isEqualTo(PostStatus.DRAFT);
-        eventPublisher.published.clear();
+        outbox.events.clear();
 
         service.unpublish(AUTHOR, postId);
 
         // Idempotent DRAFT → DRAFT path: no event of any kind.
-        assertThat(eventPublisher.published)
+        assertThat(outbox.events)
                 .as("no event on the idempotent already-DRAFT unpublish")
                 .isEmpty();
     }
@@ -600,28 +601,28 @@ class ContentCommandServiceTest {
     @Test
     void deleteEmitsPostDeletedEvent() {
         Long postId = fullyPreparedPost(AUTHOR);
-        eventPublisher.published.clear();
+        outbox.events.clear();
 
         service.delete(AUTHOR, postId);
 
         assertThat(eventsOfType(ContentPostEventType.POST_DELETED)).hasSize(1);
-        ContentPostEvent event = singleOf(ContentPostEventType.POST_DELETED);
-        assertThat(event.postId()).isEqualTo(postId);
-        assertThat(event.authorId()).isEqualTo(AUTHOR);
-        assertThat(event.changes()).isEmpty();
+        ContentOutboxEvent event = singleOf(ContentPostEventType.POST_DELETED);
+        assertThat(event.aggregateId()).isEqualTo(postId);
+        assertThat(event.payloadJson()).contains("\"authorId\":" + AUTHOR);
+        assertThat(event.payloadJson()).contains("\"status\":\"DELETED\"");
     }
 
     @Test
     void deleteWhenAlreadyDeletedEmitsNoEvent() {
         Long postId = fullyPreparedPost(AUTHOR);
         service.delete(AUTHOR, postId);
-        eventPublisher.published.clear();
+        outbox.events.clear();
 
         // Second delete on an already-DELETED post: loadOwnedNonDeletedPost throws, so no event.
         assertThatThrownBy(() -> service.delete(AUTHOR, postId))
                 .isInstanceOf(PlatformException.class)
                 .matches(ex -> ((PlatformException) ex).errorCode() == ErrorCode.CONTENT_ALREADY_DELETED);
-        assertThat(eventPublisher.published)
+        assertThat(outbox.events)
                 .as("no event on the idempotent already-DELETED delete")
                 .isEmpty();
     }
@@ -629,17 +630,16 @@ class ContentCommandServiceTest {
     @Test
     void updateMetadataEmitsPostEditedEvent() {
         Long postId = fullyPreparedPost(AUTHOR);
-        eventPublisher.published.clear(); // fullyPreparedPost already called updateMetadata once.
+        outbox.events.clear(); // fullyPreparedPost already called updateMetadata once.
 
         // Same visibility (PUBLIC → PUBLIC) — only EDITED, no VISIBILITY_CHANGED.
         service.updateMetadata(AUTHOR, postId, new UpdatePostMetadataRequest(
                 "New Title", "new summary", PostVisibility.PUBLIC, null, List.of(), List.of()));
 
         assertThat(eventsOfType(ContentPostEventType.POST_EDITED)).hasSize(1);
-        ContentPostEvent edited = singleOf(ContentPostEventType.POST_EDITED);
-        assertThat(edited.postId()).isEqualTo(postId);
-        assertThat(edited.authorId()).isEqualTo(AUTHOR);
-        assertThat(edited.changes()).isEmpty();
+        ContentOutboxEvent edited = singleOf(ContentPostEventType.POST_EDITED);
+        assertThat(edited.aggregateId()).isEqualTo(postId);
+        assertThat(edited.payloadJson()).contains("\"authorId\":" + AUTHOR);
 
         // Same-visibility path MUST NOT co-emit a visibility-changed event.
         assertThat(eventsOfType(ContentPostEventType.POST_VISIBILITY_CHANGED))
@@ -653,7 +653,7 @@ class ContentCommandServiceTest {
         // fullyPreparedPost seeds visibility = PUBLIC.
         assertThat(repository.findPostById(postId).orElseThrow().visibility())
                 .isEqualTo(PostVisibility.PUBLIC);
-        eventPublisher.published.clear();
+        outbox.events.clear();
 
         // Flip PUBLIC → PRIVATE.
         service.updateMetadata(AUTHOR, postId, new UpdatePostMetadataRequest(
@@ -662,27 +662,25 @@ class ContentCommandServiceTest {
         assertThat(eventsOfType(ContentPostEventType.POST_EDITED)).hasSize(1);
         assertThat(eventsOfType(ContentPostEventType.POST_VISIBILITY_CHANGED)).hasSize(1);
 
-        ContentPostEvent vis = singleOf(ContentPostEventType.POST_VISIBILITY_CHANGED);
-        assertThat(vis.postId()).isEqualTo(postId);
-        assertThat(vis.authorId()).isEqualTo(AUTHOR);
-        assertThat(vis.changes()).containsEntry("oldVisibility", "PUBLIC");
-        assertThat(vis.changes()).containsEntry("newVisibility", "PRIVATE");
+        ContentOutboxEvent vis = singleOf(ContentPostEventType.POST_VISIBILITY_CHANGED);
+        assertThat(vis.aggregateId()).isEqualTo(postId);
+        // The visibility-changed event carries the post's NEW visibility (PRIVATE) in its payload.
+        assertThat(vis.payloadJson()).contains("\"authorId\":" + AUTHOR);
+        assertThat(vis.payloadJson()).contains("\"visibility\":\"PRIVATE\"");
     }
 
     // --- shared fixtures ------------------------------------------------------
 
-    /** Filters the recorded events to those of the given {@link ContentPostEventType}. */
-    private java.util.List<ContentPostEvent> eventsOfType(ContentPostEventType type) {
-        return eventPublisher.published.stream()
-                .filter(ContentPostEvent.class::isInstance)
-                .map(ContentPostEvent.class::cast)
-                .filter(e -> e.eventType() == type)
+    /** Filters the recorded outbox events to those of the given {@link ContentPostEventType}. */
+    private java.util.List<ContentOutboxEvent> eventsOfType(ContentPostEventType type) {
+        return outbox.events.stream()
+                .filter(e -> type.name().equals(e.eventType()))
                 .toList();
     }
 
     /** Asserts exactly one event of the given type was recorded and returns it. */
-    private ContentPostEvent singleOf(ContentPostEventType type) {
-        java.util.List<ContentPostEvent> matches = eventsOfType(type);
+    private ContentOutboxEvent singleOf(ContentPostEventType type) {
+        java.util.List<ContentOutboxEvent> matches = eventsOfType(type);
         assertThat(matches).hasSize(1);
         return matches.get(0);
     }
@@ -739,16 +737,34 @@ class ContentCommandServiceTest {
     }
 
     /**
-     * Recording {@link ApplicationEventPublisher} that collects every published event into a list,
-     * so tests can assert on what the service emitted. Stands in for the real Spring publisher +
-     * the {@code @TransactionalEventListener} Kafka publisher (which is gated out of tests).
+     * Recording {@link ContentOutboxRepository} that collects every appended event into a list, so
+     * tests can assert on what the service emitted through {@link ContentOutboxAppender}. Stands in
+     * for the MySQL outbox table + the {@code ContentOutboxRelay} (which is gated out of tests).
      */
-    private static final class RecordingEventPublisher implements ApplicationEventPublisher {
-        final List<Object> published = new ArrayList<>();
+    private static final class RecordingOutboxRepository implements ContentOutboxRepository {
+        final List<ContentOutboxEvent> events = new ArrayList<>();
 
         @Override
-        public void publishEvent(Object event) {
-            published.add(event);
+        public void append(ContentOutboxEvent event) {
+            events.add(event);
+        }
+
+        @Override
+        public List<ContentOutboxEvent> findUnpublished(int limit) {
+            return List.of();
+        }
+
+        @Override
+        public void markPublished(Long id, LocalDateTime publishedAt) {}
+
+        @Override
+        public long currentHighWatermark() {
+            return 0;
+        }
+
+        @Override
+        public List<ContentOutboxEvent> findAfterId(long afterId, int limit) {
+            return List.of();
         }
     }
 
@@ -843,7 +859,7 @@ class ContentCommandServiceTest {
             ContentPost post = posts.get(postId);
             posts.put(postId, new ContentPost(post.id(), post.authorId(), post.clientRequestId(), title,
                     summary, coverObjectKey, post.status(), visibility, post.publishStage(),
-                    post.publishedAt(), post.createdAt(), NOW));
+                    post.publishedAt(), post.createdAt(), NOW, post.sourceVersion()));
         }
 
         @Override
@@ -894,7 +910,7 @@ class ContentCommandServiceTest {
                     status == null ? post.status() : status,
                     post.visibility(),
                     stage == null ? post.publishStage() : stage,
-                    publishedAt, post.createdAt(), NOW));
+                    publishedAt, post.createdAt(), NOW, post.sourceVersion()));
         }
 
         @Override
@@ -902,7 +918,17 @@ class ContentCommandServiceTest {
             ContentPost post = posts.get(postId);
             posts.put(postId, new ContentPost(post.id(), post.authorId(), post.clientRequestId(),
                     post.title(), post.summary(), post.coverObjectKey(), PostStatus.DELETED,
-                    post.visibility(), post.publishStage(), post.publishedAt(), post.createdAt(), NOW));
+                    post.visibility(), post.publishStage(), post.publishedAt(), post.createdAt(), NOW,
+                    post.sourceVersion()));
+        }
+
+        @Override
+        public void bumpSourceVersion(Long postId) {
+            ContentPost post = posts.get(postId);
+            posts.put(postId, new ContentPost(post.id(), post.authorId(), post.clientRequestId(),
+                    post.title(), post.summary(), post.coverObjectKey(), post.status(), post.visibility(),
+                    post.publishStage(), post.publishedAt(), post.createdAt(), NOW,
+                    post.sourceVersion() + 1));
         }
 
         @Override
@@ -917,17 +943,27 @@ class ContentCommandServiceTest {
             return posts.values().stream().filter(p -> authorId.equals(p.authorId())).toList();
         }
 
+        @Override
+        public List<ContentPost> findPublicPublishedAfterId(Long afterId, int limit) {
+            return posts.values().stream()
+                    .filter(p -> p.status() == PostStatus.PUBLISHED && p.visibility() == PostVisibility.PUBLIC)
+                    .filter(p -> afterId == null || p.id() > afterId)
+                    .sorted(java.util.Comparator.comparingLong(ContentPost::id))
+                    .limit(limit)
+                    .toList();
+        }
+
         private void setStage(Long postId, PublishStage stage) {
             ContentPost post = posts.get(postId);
             posts.put(postId, new ContentPost(post.id(), post.authorId(), post.clientRequestId(),
                     post.title(), post.summary(), post.coverObjectKey(), post.status(), post.visibility(),
-                    stage, post.publishedAt(), post.createdAt(), NOW));
+                    stage, post.publishedAt(), post.createdAt(), NOW, post.sourceVersion()));
         }
 
         private static ContentPost withTimestamps(ContentPost post, LocalDateTime ts) {
             return new ContentPost(post.id(), post.authorId(), post.clientRequestId(), post.title(),
                     post.summary(), post.coverObjectKey(), post.status(), post.visibility(),
-                    post.publishStage(), post.publishedAt(), ts, ts);
+                    post.publishStage(), post.publishedAt(), ts, ts, post.sourceVersion());
         }
 
         private static ContentPostBody withTimestamps(ContentPostBody body, LocalDateTime ts) {

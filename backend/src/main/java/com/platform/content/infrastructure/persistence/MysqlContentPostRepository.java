@@ -167,6 +167,11 @@ public class MysqlContentPostRepository implements ContentPostRepository {
     }
 
     @Override
+    public void bumpSourceVersion(Long postId) {
+        mapper.bumpSourceVersion(postId);
+    }
+
+    @Override
     public List<ContentPost> findPublicPublished(int limit, long offset) {
         return mapper.findPublicPublished(limit, offset).stream()
                 .map(ContentPostRow::toDomain)
@@ -176,6 +181,13 @@ public class MysqlContentPostRepository implements ContentPostRepository {
     @Override
     public List<ContentPost> findByAuthor(Long authorId, int limit, long offset) {
         return mapper.findByAuthor(authorId, limit, offset).stream()
+                .map(ContentPostRow::toDomain)
+                .toList();
+    }
+
+    @Override
+    public List<ContentPost> findPublicPublishedAfterId(Long afterId, int limit) {
+        return mapper.findPublicPublishedAfterId(afterId, limit).stream()
                 .map(ContentPostRow::toDomain)
                 .toList();
     }

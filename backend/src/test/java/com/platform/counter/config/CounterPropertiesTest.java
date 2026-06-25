@@ -25,6 +25,8 @@ class CounterPropertiesTest {
         assertThat(counterProperties.kafka().relationConsumerGroup()).isEqualTo("counter-relation-group");
         assertThat(counterProperties.kafka().contentEventsTopic()).isEqualTo("content-events");
         assertThat(counterProperties.kafka().contentConsumerGroup()).isEqualTo("counter-content-group");
+        assertThat(counterProperties.kafka().snapshotTopic()).isEqualTo("counter-snapshot-events");
+        assertThat(counterProperties.kafka().snapshotConsumerGroup()).isEqualTo("counter-snapshot-relay-group");
         assertThat(counterProperties.flush().mode()).isEqualTo("adaptive");
         assertThat(counterProperties.flush().minIntervalMs()).isEqualTo(500);
         assertThat(counterProperties.flush().batchSize()).isEqualTo(1000);

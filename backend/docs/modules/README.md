@@ -12,6 +12,7 @@
 | relation | [relation.md](relation.md) | 关注/取关、following/followers 列表、关系事件 outbox + Canal + Kafka + 粉丝投影 |
 | counter | [counter.md](counter.md) | 文章点赞/收藏/浏览计数、用户关注/粉丝/作品计数、位图事实层 + Redis 聚合 + 跨模块事件消费 |
 | cache | [cache.md](cache.md) | Feed 三级缓存（L2 Caffeine / L1 Redis 骨架 / L0 Redis 片段）、keyset cursor 分页、个性化 overlay、统一 content 事件失效 + 对账调度 |
+| search | [search.md](search.md) | Elasticsearch 公开文章检索、content outbox 索引同步、counter 快照热度排序 |
 
 ## 模块文档列表
 
@@ -21,6 +22,7 @@
 - [Relation 模块](relation.md)
 - [Counter 模块](counter.md)
 - [Cache / Feed 模块](cache.md)
+- [Search 模块](search.md)
 
 ## 文档约定
 

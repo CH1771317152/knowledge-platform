@@ -37,6 +37,8 @@ spring:
     baseline-on-migrate: true
     baseline-version: 0
     clean-disabled: true
+  elasticsearch:
+    uris: ${ELASTICSEARCH_URIS:http://localhost:9200}
 
 mybatis:
   mapper-locations: classpath*:mapper/**/*.xml
@@ -122,9 +124,42 @@ platform:
       relation-consumer-group: ${COUNTER_RELATION_CONSUMER_GROUP:counter-relation-group}
       content-events-topic: ${CONTENT_EVENTS_TOPIC:content-events}
       content-consumer-group: ${COUNTER_CONTENT_CONSUMER_GROUP:counter-content-group}
+      snapshot-topic: ${COUNTER_SNAPSHOT_TOPIC:counter-snapshot-events}
+      snapshot-consumer-group: ${COUNTER_SNAPSHOT_CONSUMER_GROUP:counter-snapshot-relay-group}
     flush:
       mode: ${COUNTER_FLUSH_MODE:adaptive}
       fixed-interval-ms: ${COUNTER_FLUSH_FIXED_MS:1000}
       min-interval-ms: ${COUNTER_FLUSH_MIN_MS:500}
       max-interval-ms: ${COUNTER_FLUSH_MAX_MS:5000}
       batch-size: ${COUNTER_FLUSH_BATCH:1000}
+  search:
+    enabled: ${SEARCH_ENABLED:false}
+    index:
+      read-alias: ${SEARCH_INDEX_READ_ALIAS:knowledge-posts-read}
+      write-alias: ${SEARCH_INDEX_WRITE_ALIAS:knowledge-posts-write}
+      initial-index: ${SEARCH_INDEX_INITIAL:knowledge-posts-v1}
+      body-max-chars: ${SEARCH_BODY_MAX_CHARS:50000}
+      oss-read-timeout-ms: ${SEARCH_OSS_READ_TIMEOUT_MS:3000}
+      oss-max-concurrency: ${SEARCH_OSS_MAX_CONCURRENCY:8}
+    cursor:
+      secret: ${SEARCH_CURSOR_SECRET:change-this-search-cursor-secret}
+      ttl-seconds: ${SEARCH_CURSOR_TTL_SECONDS:600}
+    rank:
+      title-boost: ${SEARCH_RANK_TITLE_BOOST:5.0}
+      description-boost: ${SEARCH_RANK_DESCRIPTION_BOOST:2.0}
+      body-boost: ${SEARCH_RANK_BODY_BOOST:1.0}
+      favorite-weight: ${SEARCH_RANK_FAVORITE_WEIGHT:3.0}
+      like-weight: ${SEARCH_RANK_LIKE_WEIGHT:2.0}
+      view-weight: ${SEARCH_RANK_VIEW_WEIGHT:0.2}
+      recency-weight: ${SEARCH_RANK_RECENCY_WEIGHT:1.0}
+    kafka:
+      content-consumer-group: ${SEARCH_CONTENT_CONSUMER_GROUP:search-content-indexer-group}
+      content-retry-topic: ${SEARCH_CONTENT_RETRY_TOPIC:search-content-retry}
+      content-dlq-topic: ${SEARCH_CONTENT_DLQ_TOPIC:search-content-dlq}
+      counter-snapshot-topic: ${COUNTER_SNAPSHOT_TOPIC:counter-snapshot-events}
+      counter-consumer-group: ${SEARCH_COUNTER_CONSUMER_GROUP:search-counter-snapshot-group}
+      counter-retry-topic: ${SEARCH_COUNTER_RETRY_TOPIC:search-counter-retry}
+      counter-dlq-topic: ${SEARCH_COUNTER_DLQ_TOPIC:search-counter-dlq}
+    rebuild:
+      scan-batch-size: ${SEARCH_REBUILD_SCAN_BATCH:500}
+      bulk-batch-size: ${SEARCH_REBUILD_BULK_BATCH:200}

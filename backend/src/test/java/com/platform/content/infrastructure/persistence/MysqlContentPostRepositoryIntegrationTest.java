@@ -93,7 +93,7 @@ class MysqlContentPostRepositoryIntegrationTest {
     void savesDraftPersistsBodyAndAdvancesThroughPublishLifecycle() {
         String clientRequestId = "req-" + postId;
         ContentPost draft = new ContentPost(postId, authorId, clientRequestId, "Draft Title", "summary",
-                null, PostStatus.DRAFT, PostVisibility.PRIVATE, PublishStage.DRAFT_CREATED, null, null, null);
+                null, PostStatus.DRAFT, PostVisibility.PRIVATE, PublishStage.DRAFT_CREATED, null, null, null, 0L);
         ContentPostBody body = new ContentPostBody(postId, PostBodyFormat.MARKDOWN, "kp-bucket", null,
                 null, null, 0L, 1, null, null, null, null);
 
@@ -191,7 +191,7 @@ class MysqlContentPostRepositoryIntegrationTest {
 
     private void saveSimpleDraft(Long id, String clientRequestId) {
         ContentPost draft = new ContentPost(id, authorId, clientRequestId, "T-" + clientRequestId, null,
-                null, PostStatus.DRAFT, PostVisibility.PRIVATE, PublishStage.DRAFT_CREATED, null, null, null);
+                null, PostStatus.DRAFT, PostVisibility.PRIVATE, PublishStage.DRAFT_CREATED, null, null, null, 0L);
         ContentPostBody body = new ContentPostBody(id, PostBodyFormat.MARKDOWN, null, null, null, null,
                 0L, 1, null, null, null, null);
         repository.saveDraft(draft, body);

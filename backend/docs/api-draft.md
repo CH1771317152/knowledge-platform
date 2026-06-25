@@ -71,3 +71,17 @@ GET /api/feed/public             (公开) 公共 Feed（PUBLISHED + PUBLIC，pub
 GET /api/feed/me                 (认证) 当前用户的 Feed（draft + published，所有可见性，排除 DELETED，created_at 倒序）
                                       cursor / size 同上
 ```
+
+## Search
+
+公开文章搜索。匿名可访问；携带合法 JWT 时返回当前用户点赞/收藏状态。
+
+```text
+GET /api/search/posts            (公开) Elasticsearch 公开文章检索（PUBLISHED + PUBLIC + ARTICLE）
+                                      q          搜索关键词（标题 / 摘要 / 正文，标题命中优先排序）
+                                      tag        标签过滤，可选
+                                      contentType 内容类型，第一版固定 ARTICLE
+                                      cursor     search_after 游标，HMAC 签名 + TTL，可选（缺省 = head）
+                                      size       每页大小，默认 20，钳制 [1,50]
+                                      Bearer 可选 → 登录读者带 likedByMe/favedByMe overlay，匿名则两位为 null
+```

@@ -176,7 +176,7 @@ class ContentQueryServiceTest {
         repository.seedPost(new ContentPost(
                 postId, AUTHOR, null, "Draft", "summary", null,
                 PostStatus.DRAFT, PostVisibility.PRIVATE, PublishStage.DRAFT_CREATED,
-                null, NOW, NOW));
+                null, NOW, NOW, 0L));
 
         PostPublishingStateResponse state = service.getPublishingState(AUTHOR, postId);
         assertThat(state.postId()).isEqualTo(postId);
@@ -208,7 +208,7 @@ class ContentQueryServiceTest {
 
         repository.seedPost(new ContentPost(
                 postId, authorId, null, "Title " + postId, "summary", null,
-                status, visibility, PublishStage.METADATA_COMPLETED, NOW, NOW, NOW));
+                status, visibility, PublishStage.METADATA_COMPLETED, NOW, NOW, NOW, 0L));
         repository.seedBody(new ContentPostBody(
                 postId, PostBodyFormat.MARKDOWN, "fake-bucket", objectKey, "etag-" + postId, "sha-" + postId,
                 (long) bytes.length, 1, null, NOW, NOW, NOW));
@@ -222,7 +222,7 @@ class ContentQueryServiceTest {
                       String title, List<String> tags) {
         repository.seedPost(new ContentPost(
                 postId, authorId, null, title, "summary", null,
-                status, visibility, PublishStage.METADATA_COMPLETED, NOW, NOW, NOW));
+                status, visibility, PublishStage.METADATA_COMPLETED, NOW, NOW, NOW, 0L));
         repository.seedTags(postId, tags);
     }
 
@@ -338,11 +338,17 @@ class ContentQueryServiceTest {
         }
 
         @Override
+        public void bumpSourceVersion(Long postId) {
+            throw new UnsupportedOperationException();
+        }
+
+        @Override
         public void softDelete(Long postId) {
             ContentPost post = posts.get(postId);
             posts.put(postId, new ContentPost(post.id(), post.authorId(), post.clientRequestId(),
                     post.title(), post.summary(), post.coverObjectKey(), PostStatus.DELETED,
-                    post.visibility(), post.publishStage(), post.publishedAt(), post.createdAt(), NOW));
+                    post.visibility(), post.publishStage(), post.publishedAt(), post.createdAt(), NOW,
+                    post.sourceVersion()));
         }
 
         @Override
@@ -359,6 +365,17 @@ class ContentQueryServiceTest {
             lastLimit = limit;
             lastOffset = offset;
             return posts.values().stream().filter(p -> authorId.equals(p.authorId())).toList();
+        }
+
+        @Override
+        public List<ContentPost> findPublicPublishedAfterId(Long afterId, int limit) {
+            lastLimit = limit;
+            return posts.values().stream()
+                    .filter(p -> p.status() == PostStatus.PUBLISHED && p.visibility() == PostVisibility.PUBLIC)
+                    .filter(p -> afterId == null || p.id() > afterId)
+                    .sorted(java.util.Comparator.comparingLong(ContentPost::id))
+                    .limit(limit)
+                    .toList();
         }
     }
 }

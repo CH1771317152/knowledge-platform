@@ -19,6 +19,7 @@ public class ContentPostRow {
     private LocalDateTime publishedAt;
     private LocalDateTime createdAt;
     private LocalDateTime updatedAt;
+    private long sourceVersion;
 
     public static ContentPostRow fromDomain(ContentPost post) {
         ContentPostRow row = new ContentPostRow();
@@ -34,6 +35,7 @@ public class ContentPostRow {
         row.setPublishedAt(post.publishedAt());
         row.setCreatedAt(post.createdAt());
         row.setUpdatedAt(post.updatedAt());
+        row.setSourceVersion(post.sourceVersion());
         return row;
     }
 
@@ -50,7 +52,8 @@ public class ContentPostRow {
                 publishStage == null ? null : PublishStage.valueOf(publishStage),
                 publishedAt,
                 createdAt,
-                updatedAt
+                updatedAt,
+                sourceVersion
         );
     }
 
@@ -148,5 +151,13 @@ public class ContentPostRow {
 
     public void setUpdatedAt(LocalDateTime updatedAt) {
         this.updatedAt = updatedAt;
+    }
+
+    public long getSourceVersion() {
+        return sourceVersion;
+    }
+
+    public void setSourceVersion(long sourceVersion) {
+        this.sourceVersion = sourceVersion;
     }
 }

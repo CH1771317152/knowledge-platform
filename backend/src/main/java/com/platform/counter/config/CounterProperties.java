@@ -15,7 +15,9 @@ public record CounterProperties(Kafka kafka, Flush flush) {
             String retryConsumerGroup,
             String relationConsumerGroup,
             String contentEventsTopic,
-            String contentConsumerGroup
+            String contentConsumerGroup,
+            String snapshotTopic,
+            String snapshotConsumerGroup
     ) {}
 
     public record Flush(

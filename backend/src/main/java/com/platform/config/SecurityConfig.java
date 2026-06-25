@@ -84,6 +84,14 @@ public class SecurityConfig {
                         // (drafts + published, all visibilities). The /api/feed/ prefix is distinct
                         // from /api/posts/, /api/users/, /api/auth/, so no existing matcher conflicts.
                         .requestMatchers(HttpMethod.GET, "/api/feed/public").permitAll()
+                        // Search reads: GET /api/search/posts is permitAll — anonymous readers get the
+                        // page with likedByMe/favedByMe left null; a Bearer token overlays both bits for
+                        // the authenticated reader (same overlay contract as the public feed). The
+                        // /api/search/ prefix is distinct from every other matcher here. When
+                        // platform.search.enabled=false the controller bean is absent and the path 404s
+                        // regardless; the matcher simply guarantees that, when enabled, the endpoint is
+                        // reachable without auth. No other /api/search/** sub-path exists in v1.
+                        .requestMatchers(HttpMethod.GET, "/api/search/posts").permitAll()
                         .anyRequest().authenticated())
                 .addFilterBefore(jwtAuthenticationFilter, UsernamePasswordAuthenticationFilter.class)
                 .build();
