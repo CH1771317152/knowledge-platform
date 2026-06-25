@@ -2,6 +2,7 @@ package com.platform.user.application;
 
 import com.platform.common.exception.ErrorCode;
 import com.platform.common.exception.PlatformException;
+import com.platform.common.util.Strings;
 import com.platform.user.domain.UserAccount;
 import com.platform.user.domain.UserProfile;
 import com.platform.user.domain.UserRole;
@@ -34,7 +35,7 @@ public class UserCommandService {
             throw new PlatformException("email already exists");
         }
 
-        UserAccount account = new UserAccount(null, username, email, trimToNull(command.phone()),
+        UserAccount account = new UserAccount(null, username, email, Strings.trimToNull(command.phone()),
                 passwordHash, UserStatus.ACTIVE, UserRole.USER, false, false, null, null, null);
         UserProfile profile = new UserProfile(null, username, null, null, null, null, null, null, null);
         return userRepository.save(account, profile);
@@ -49,10 +50,10 @@ public class UserCommandService {
                 .orElseThrow(() -> new PlatformException("user profile not found"));
         UserProfile updated = new UserProfile(userId,
                 normalizeRequired(command.displayName(), "displayName"),
-                trimToNull(command.avatarUrl()),
-                trimToNull(command.bio()),
-                trimToNull(command.location()),
-                trimToNull(command.website()),
+                Strings.trimToNull(command.avatarUrl()),
+                Strings.trimToNull(command.bio()),
+                Strings.trimToNull(command.location()),
+                Strings.trimToNull(command.website()),
                 command.birthday(),
                 existing.createdAt(),
                 existing.updatedAt());
@@ -90,18 +91,10 @@ public class UserCommandService {
     }
 
     private static String normalizeRequired(String value, String fieldName) {
-        String normalized = trimToNull(value);
+        String normalized = Strings.trimToNull(value);
         if (normalized == null) {
             throw new PlatformException(fieldName + " must not be blank");
         }
         return normalized;
-    }
-
-    private static String trimToNull(String value) {
-        if (value == null) {
-            return null;
-        }
-        String trimmed = value.trim();
-        return trimmed.isEmpty() ? null : trimmed;
     }
 }

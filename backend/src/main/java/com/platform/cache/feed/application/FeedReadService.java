@@ -11,6 +11,7 @@ import com.platform.cache.feed.dto.FeedPageResponse;
 import com.platform.cache.feed.hotkey.FeedHotKeyDetector;
 import com.platform.cache.feed.infrastructure.redis.FeedRedisKeys;
 import com.platform.cache.feed.infrastructure.redis.FragmentStore;
+import com.platform.cache.feed.infrastructure.redis.FragmentStore.MultiGetResult;
 import com.platform.cache.feed.infrastructure.redis.SkeletonStore;
 import com.platform.content.application.ContentQueryService;
 import com.platform.content.domain.ContentPost;
@@ -213,12 +214,16 @@ public class FeedReadService {
             skeletonStore.put(pageKey, page, l1Ttl);
         }
 
-        // 4. L0 fragment assembly.
-        Map<Long, PostFragment> fragments = fragmentStore.multiGet(page.ids());
+        // 4. L0 fragment assembly — ONE Redis MGET that also reports tombstone presence (C1 fix:
+        //    previously this was multiGet + anyTombstone, two MGETs over the same keys on every
+        //    cold read).
+        MultiGetResult fragmentResult =
+                fragmentStore.multiGetWithTombstones(page.ids());
+        Map<Long, PostFragment> fragments = fragmentResult.fragments();
 
         // 5. Tombstone check → rebuild the page (C3 fix). A tombstone means one of the skeleton's
         //    posts was deleted; the skeleton is stale and must be re-derived from source.
-        if (fragmentStore.anyTombstone(page.ids())) {
+        if (fragmentResult.hasTombstone()) {
             FeedPage rebuilt = singleFlight.executeWithLock(pageKey, sourceSupplier::get);
             if (rebuilt == null || rebuilt.ids() == null || rebuilt.ids().isEmpty()) {
                 // The page that previously had rows is now empty (e.g. all posts deleted). Cache the

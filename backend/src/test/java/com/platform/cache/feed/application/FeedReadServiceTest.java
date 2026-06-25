@@ -22,6 +22,7 @@ import com.platform.cache.feed.domain.PostFragment;
 import com.platform.cache.feed.dto.FeedPageResponse;
 import com.platform.cache.feed.hotkey.FeedHotKeyDetector;
 import com.platform.cache.feed.infrastructure.redis.FragmentStore;
+import com.platform.cache.feed.infrastructure.redis.FragmentStore.MultiGetResult;
 import com.platform.cache.feed.infrastructure.redis.SkeletonStore;
 import com.platform.content.application.ContentQueryService;
 import com.platform.content.domain.ContentPost;
@@ -172,8 +173,9 @@ class FeedReadServiceTest {
         List<Long> ids = List.of(1L, 2L);
         FeedPage skeleton = new FeedPage(ids, true, new Cursor(PUB_AT.minusMinutes(1), 2L));
         when(skeletonStore.get(FeedRedisPageKeys.publicHead(20))).thenReturn(Optional.of(skeleton));
-        when(fragmentStore.multiGet(ids)).thenReturn(Map.of(1L, fragment(1L), 2L, fragment(2L)));
-        when(fragmentStore.anyTombstone(ids)).thenReturn(false);
+        when(fragmentStore.multiGetWithTombstones(ids)).thenReturn(
+                new MultiGetResult(
+                        Map.of(1L, fragment(1L), 2L, fragment(2L)), false));
 
         FeedPageResponse result = service.readPublicFeed(null, 20, null);
 
@@ -196,8 +198,8 @@ class FeedReadServiceTest {
         FeedPage fresh = new FeedPage(ids, false, null);
         when(skeletonStore.get(FeedRedisPageKeys.publicHead(20))).thenReturn(Optional.empty());
         when(sourceQuery.findPublicFeedHead(20)).thenReturn(fresh);
-        when(fragmentStore.multiGet(ids)).thenReturn(Map.of(10L, fragment(10L), 11L, fragment(11L)));
-        when(fragmentStore.anyTombstone(ids)).thenReturn(false);
+        when(fragmentStore.multiGetWithTombstones(ids)).thenReturn(
+                new MultiGetResult(Map.of(10L, fragment(10L), 11L, fragment(11L)), false));
 
         FeedPageResponse result = service.readPublicFeed(null, 20, null);
 
@@ -241,9 +243,10 @@ class FeedReadServiceTest {
 
         when(skeletonStore.get(FeedRedisPageKeys.publicHead(20))).thenReturn(Optional.of(stale));
         when(sourceQuery.findPublicFeedHead(20)).thenReturn(rebuilt);
-        when(fragmentStore.anyTombstone(staleIds)).thenReturn(true);
-        when(fragmentStore.anyTombstone(rebuiltIds)).thenReturn(false);
-        when(fragmentStore.multiGet(staleIds)).thenReturn(Map.of()); // tombstone omitted by multiGet
+        // Stale skeleton: the single combined MGET reports a tombstone (triggers rebuild).
+        when(fragmentStore.multiGetWithTombstones(staleIds)).thenReturn(
+                new MultiGetResult(Map.of(), true));
+        // After rebuild: plain multiGet assembles the fresh skeleton (no tombstone re-check needed).
         when(fragmentStore.multiGet(rebuiltIds)).thenReturn(Map.of(2L, fragment(2L)));
 
         FeedPageResponse result = service.readPublicFeed(null, 20, null);
@@ -262,7 +265,7 @@ class FeedReadServiceTest {
         when(skeletonStore.get(FeedRedisPageKeys.publicHead(20))).thenReturn(Optional.of(skeleton));
 
         // 100L present; 101L missing → must be backfilled.
-        when(fragmentStore.multiGet(ids)).thenAnswer(inv -> {
+        when(fragmentStore.multiGetWithTombstones(ids)).thenAnswer(inv -> {
             List<Long> asked = inv.getArgument(0);
             Map<Long, PostFragment> out = new java.util.LinkedHashMap<>();
             for (Long id : asked) {
@@ -270,9 +273,8 @@ class FeedReadServiceTest {
                     out.put(id, fragment(100L));
                 }
             }
-            return out;
+            return new MultiGetResult(out, false);
         });
-        when(fragmentStore.anyTombstone(ids)).thenReturn(false);
 
         // Content / counter / user return the metadata for the missing post.
         when(contentQueryService.findPostById(101L)).thenReturn(Optional.of(contentPost(101L)));
@@ -300,8 +302,7 @@ class FeedReadServiceTest {
         List<Long> ids = List.of(200L);
         FeedPage skeleton = new FeedPage(ids, true, new Cursor(PUB_AT, 200L));
         when(skeletonStore.get(FeedRedisPageKeys.publicHead(20))).thenReturn(Optional.of(skeleton));
-        when(fragmentStore.multiGet(ids)).thenReturn(Map.of());
-        when(fragmentStore.anyTombstone(ids)).thenReturn(false);
+        when(fragmentStore.multiGetWithTombstones(ids)).thenReturn(new MultiGetResult(Map.of(), false));
         when(contentQueryService.findPostById(200L)).thenReturn(Optional.empty()); // deleted
 
         FeedPageResponse result = service.readPublicFeed(null, 20, null);
@@ -354,14 +355,14 @@ class FeedReadServiceTest {
         List<Long> ids = List.of(5L);
         FeedPage skeleton = new FeedPage(ids, false, null);
         when(skeletonStore.get(FeedRedisPageKeys.userHead(AUTHOR, 10))).thenReturn(Optional.of(skeleton));
-        when(fragmentStore.multiGet(ids)).thenReturn(Map.of(5L, fragment(5L)));
-        when(fragmentStore.anyTombstone(ids)).thenReturn(false);
+        when(fragmentStore.multiGetWithTombstones(ids)).thenReturn(
+                new MultiGetResult(Map.of(5L, fragment(5L)), false));
 
         FeedPageResponse result = service.readUserFeed(AUTHOR, null, 10);
 
         assertThat(result.items()).extracting("postId").containsExactly(5L);
         verify(sourceQuery, never()).findUserFeedHead(any(), anyInt()); // L1 hit → no source call
-        verify(fragmentStore, times(1)).multiGet(ids);
+        verify(fragmentStore, times(1)).multiGetWithTombstones(ids);
     }
 
     // --- overlay (Task 9) --------------------------------------------------
@@ -371,8 +372,8 @@ class FeedReadServiceTest {
         List<Long> ids = List.of(1L);
         FeedPage skeleton = new FeedPage(ids, false, null);
         when(skeletonStore.get(FeedRedisPageKeys.publicHead(20))).thenReturn(Optional.of(skeleton));
-        when(fragmentStore.multiGet(ids)).thenReturn(Map.of(1L, fragment(1L)));
-        when(fragmentStore.anyTombstone(ids)).thenReturn(false);
+        when(fragmentStore.multiGetWithTombstones(ids)).thenReturn(
+                new MultiGetResult(Map.of(1L, fragment(1L)), false));
         // The overlay service's single batched call returns liked=true, faved=false for post 1.
         when(counterReadService.hasActedBatch(
                 eq(42L), eq(CounterEntityType.ARTICLE), eq(ids),
@@ -395,8 +396,8 @@ class FeedReadServiceTest {
         List<Long> ids = List.of(1L);
         FeedPage skeleton = new FeedPage(ids, false, null);
         when(skeletonStore.get(FeedRedisPageKeys.publicHead(20))).thenReturn(Optional.of(skeleton));
-        when(fragmentStore.multiGet(ids)).thenReturn(Map.of(1L, fragment(1L)));
-        when(fragmentStore.anyTombstone(ids)).thenReturn(false);
+        when(fragmentStore.multiGetWithTombstones(ids)).thenReturn(
+                new MultiGetResult(Map.of(1L, fragment(1L)), false));
 
         // Anonymous reader (null requester) — overlay is skipped; bits stay null (the sentinel for
         // "no overlay applied").

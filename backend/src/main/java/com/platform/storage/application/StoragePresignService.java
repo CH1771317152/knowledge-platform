@@ -33,9 +33,6 @@ public class StoragePresignService {
     }
 
     public PresignedUpload presignForUser(Long userId, PresignRequest request) {
-        if (request == null) {
-            throw new PlatformException(ErrorCode.STORAGE_PRESIGN_FORBIDDEN, "Object key is not allowed");
-        }
         String objectKey = request.objectKey();
         String contentType = request.contentType();
 

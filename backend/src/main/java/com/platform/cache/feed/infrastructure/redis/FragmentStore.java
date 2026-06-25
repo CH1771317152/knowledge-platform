@@ -10,7 +10,6 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import org.springframework.context.annotation.Profile;
-import org.springframework.dao.DataAccessException;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.stereotype.Repository;
 
@@ -80,32 +79,52 @@ public class FragmentStore {
      * distinguishes the rebuild case).
      */
     public Map<Long, PostFragment> multiGet(List<Long> postIds) {
+        return multiGetWithTombstones(postIds).fragments();
+    }
+
+    /**
+     * Combined batch fetch + tombstone probe over a single Redis {@code MGET}. The read orchestrator
+     * previously called {@link #multiGet(List)} then {@link #anyTombstone(List)} — two MGETs over the
+     * same keys on every cold read. This variant folds both into one round-trip: it returns the
+     * present, non-tombstone fragments in {@link MultiGetResult#fragments()} and reports whether any
+     * of the fetched values was a tombstone via {@link MultiGetResult#hasTombstone()}.
+     *
+     * @since C1 optimization (hot-path: one MGET instead of two per cold feed read)
+     */
+    public MultiGetResult multiGetWithTombstones(List<Long> postIds) {
         if (postIds.isEmpty()) {
-            return Map.of();
+            return new MultiGetResult(Map.of(), false);
         }
         List<String> keys = new ArrayList<>(postIds.size());
         for (Long pid : postIds) {
             keys.add(FeedRedisKeys.fragment(pid));
         }
-        List<String> values;
-        try {
-            values = template.opsForValue().multiGet(keys);
-        } catch (DataAccessException e) {
-            throw e;
-        }
+        List<String> values = template.opsForValue().multiGet(keys);
         if (values == null) {
-            return Map.of();
+            return new MultiGetResult(Map.of(), false);
         }
         Map<Long, PostFragment> out = new LinkedHashMap<>(postIds.size());
+        boolean sawTombstone = false;
         for (int i = 0; i < postIds.size(); i++) {
             String raw = i < values.size() ? values.get(i) : null;
-            if (raw == null || PostFragment.TOMBSTONE.equals(raw)) {
+            if (raw == null) {
+                continue;
+            }
+            if (PostFragment.TOMBSTONE.equals(raw)) {
+                sawTombstone = true;
                 continue;
             }
             out.put(postIds.get(i), deserialize(raw, postIds.get(i)));
         }
-        return out;
+        return new MultiGetResult(out, sawTombstone);
     }
+
+    /**
+     * Result of {@link #multiGetWithTombstones(List)}: the assembled fragment map plus whether any
+     * of the fetched values was a tombstone marker. Tombstones are excluded from {@link #fragments()}
+     * (assembly cannot reconstruct a deleted post) and surfaced only via {@link #hasTombstone()}.
+     */
+    public record MultiGetResult(Map<Long, PostFragment> fragments, boolean hasTombstone) {}
 
     /** Explicit tombstone probe for a single post (used by the read orchestrator's rebuild check). */
     public boolean isTombstone(Long postId) {

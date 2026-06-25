@@ -3,7 +3,6 @@ package com.platform.content.infrastructure.id;
 import com.platform.common.exception.ErrorCode;
 import com.platform.common.exception.PlatformException;
 import com.platform.content.config.ContentIdProperties;
-import com.platform.content.infrastructure.id.ContentIdGenerator;
 import org.springframework.stereotype.Component;
 
 import java.time.Instant;

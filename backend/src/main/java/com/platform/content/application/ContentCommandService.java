@@ -2,6 +2,7 @@ package com.platform.content.application;
 
 import com.platform.common.exception.ErrorCode;
 import com.platform.common.exception.PlatformException;
+import com.platform.common.util.Strings;
 import com.platform.content.domain.ContentPost;
 import com.platform.content.domain.ContentPostBody;
 import com.platform.content.domain.ContentPostFile;
@@ -29,7 +30,9 @@ import java.security.NoSuchAlgorithmException;
 import java.time.Duration;
 import java.time.LocalDateTime;
 import java.util.ArrayList;
+import java.util.HexFormat;
 import java.util.List;
+import java.util.Objects;
 import java.util.Optional;
 import java.util.UUID;
 import org.springframework.context.ApplicationEventPublisher;
@@ -103,7 +106,7 @@ public class ContentCommandService {
      */
     @Transactional
     public PostPublishingStateResponse createDraft(Long authorId, CreateDraftRequest request) {
-        String clientRequestId = trimToNull(request == null ? null : request.clientRequestId());
+        String clientRequestId = Strings.trimToNull(request == null ? null : request.clientRequestId());
         if (clientRequestId != null) {
             Optional<ContentPost> existing =
                     repository.findPostByAuthorAndClientRequestId(authorId, clientRequestId);
@@ -207,9 +210,9 @@ public class ContentCommandService {
 
         boolean alreadyConfirmed = body.confirmedAt() != null;
         if (alreadyConfirmed) {
-            boolean sameObject = equalsNullable(body.bodyObjectKey(), request.objectKey())
-                    && equalsNullable(body.bodyEtag(), request.etag())
-                    && equalsNullable(body.bodySha256(), request.sha256())
+            boolean sameObject = Objects.equals(body.bodyObjectKey(), request.objectKey())
+                    && Objects.equals(body.bodyEtag(), request.etag())
+                    && Objects.equals(body.bodySha256(), request.sha256())
                     && body.bodySizeBytes() != null
                     && body.bodySizeBytes() == request.sizeBytes();
             if (sameObject) {
@@ -318,7 +321,7 @@ public class ContentCommandService {
 
         repository.updateMetadata(
                 postId, request.title(), request.summary(), request.visibility(),
-                trimToNull(request.coverObjectKey()));
+                Strings.trimToNull(request.coverObjectKey()));
         repository.replaceFiles(postId, files);
         repository.replaceTags(postId, request.tags() == null ? List.of() : request.tags());
         repository.updateStatusAndStage(
@@ -360,11 +363,13 @@ public class ContentCommandService {
     @Transactional
     public PostPublishingStateResponse publish(Long authorId, Long postId) {
         ContentPost post = loadOwnedNonDeletedPost(authorId, postId);
-        repository.findBodyByPostId(postId).orElseThrow(() -> notFound(postId));
+        // Fetch the body once and reuse it for both the idempotent-republish response and the final
+        // first-publish response (C3 fix: previously findBodyByPostId was called up to 3 times here).
+        ContentPostBody body = repository.findBodyByPostId(postId).orElseThrow(() -> notFound(postId));
 
         if (post.status() == PostStatus.PUBLISHED) {
             // Idempotent: no timestamp update, no side effects, no event.
-            return PublishingStateBuilder.build(post, repository.findBodyByPostId(postId));
+            return PublishingStateBuilder.build(post, Optional.of(body));
         }
 
         if (stageOrder(post.publishStage()) < stageOrder(PublishStage.METADATA_COMPLETED)) {
@@ -387,7 +392,7 @@ public class ContentCommandService {
                     LocalDateTime.now()));
         }
 
-        return PublishingStateBuilder.build(refetch(postId), repository.findBodyByPostId(postId));
+        return PublishingStateBuilder.build(refetch(postId), Optional.of(body));
     }
 
     // --- unpublish / delete ---------------------------------------------------
@@ -435,13 +440,9 @@ public class ContentCommandService {
      */
     @Transactional
     public PostPublishingStateResponse delete(Long authorId, Long postId) {
+        // loadOwnedNonDeletedPost already rejects a DELETED post (CONTENT_ALREADY_DELETED), so
+        // delete() is never invoked on an already-deleted post. softDelete + event is the only path.
         ContentPost post = loadOwnedNonDeletedPost(authorId, postId);
-
-        if (post.status() == PostStatus.DELETED) {
-            // Idempotent. (loadOwnedNonDeletedPost already rejects DELETED, so this branch is
-            // defensive; left explicit for clarity.) No event.
-            return PublishingStateBuilder.build(post, repository.findBodyByPostId(postId));
-        }
 
         repository.softDelete(postId);
         applicationEventPublisher.publishEvent(ContentPostEvent.deleted(
@@ -498,20 +499,8 @@ public class ContentCommandService {
         return "posts/" + postId + "/body/v" + bodyVersion + ".md";
     }
 
-    private static String trimToNull(String s) {
-        if (s == null) {
-            return null;
-        }
-        String trimmed = s.trim();
-        return trimmed.isEmpty() ? null : trimmed;
-    }
-
     private static boolean isBlank(String s) {
         return s == null || s.trim().isEmpty();
-    }
-
-    private static boolean equalsNullable(String a, String b) {
-        return a == null ? b == null : a.equals(b);
     }
 
     private static PlatformException notFound(Long postId) {
@@ -526,7 +515,7 @@ public class ContentCommandService {
             while ((read = in.read(buffer)) != -1) {
                 digest.update(buffer, 0, read);
             }
-            return toHex(digest.digest());
+            return HexFormat.of().formatHex(digest.digest());
         } catch (NoSuchAlgorithmException e) {
             // SHA-256 is mandated by the JLS/JDK; never missing in practice.
             throw new PlatformException(ErrorCode.COMMON_INTERNAL_ERROR,
@@ -536,13 +525,5 @@ public class ContentCommandService {
                     "Failed reading object stream");
         }
     }
-
-    private static String toHex(byte[] bytes) {
-        StringBuilder sb = new StringBuilder(bytes.length * 2);
-        for (byte b : bytes) {
-            sb.append(Character.forDigit((b >> 4) & 0xF, 16));
-            sb.append(Character.forDigit(b & 0xF, 16));
-        }
-        return sb.toString();
-    }
 }
+

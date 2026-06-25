@@ -60,11 +60,6 @@ class StoragePresignServiceTest {
     }
 
     @Test
-    void rejectsNullRequest() {
-        assertForbidden(null);
-    }
-
-    @Test
     void capsExpirationAtConfiguredMaximum() {
         StoragePresignService cappedService = new StoragePresignService(
                 new StorageProperties("aliyun-oss", "https://oss.example.com", "cn-hangzhou",

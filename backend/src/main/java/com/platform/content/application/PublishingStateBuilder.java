@@ -58,7 +58,8 @@ final class PublishingStateBuilder {
             case BODY_URL_ISSUED -> List.of("CONFIRM_BODY");
             case BODY_CONFIRMED -> List.of("UPDATE_METADATA");
             case METADATA_COMPLETED -> List.of("PUBLISH");
-            case PUBLISHED -> List.of("UNPUBLISH");
+            // PUBLISHED is unreachable here: the early-return above already handled it.
+            case PUBLISHED -> throw new IllegalStateException("unreachable: PUBLISHED handled above");
         };
     }
 }

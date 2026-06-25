@@ -107,8 +107,8 @@ public class FeedInvalidationConsumer {
             JsonNode node = objectMapper.readTree(value);
             String eventType = node.path("eventType").asText("POST_PUBLISHED");
             Long postId = node.path("postId").asLong();
-            Long authorId = node.has("authorId") && !node.get("authorId").isNull()
-                    ? node.get("authorId").asLong() : null;
+            JsonNode authorNode = node.path("authorId");
+            Long authorId = (authorNode.isMissingNode() || authorNode.isNull()) ? null : authorNode.asLong();
 
             switch (eventType) {
                 case "POST_PUBLISHED" -> {

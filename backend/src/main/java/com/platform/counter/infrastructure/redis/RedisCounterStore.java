@@ -117,12 +117,21 @@ public class RedisCounterStore implements CounterStore {
 
     @Override
     public Map<CounterMetric, Long> readCounts(CounterEntityType etype, Long eid) {
-        // One GETRANGE per metric. The blob is tiny (40 bytes for 5 counters), but per-metric
-        // GETRANGE keeps the contract explicit against CountSchema and avoids decoding metrics
-        // that have no offset for this etype.
-        Map<CounterMetric, Long> out = new LinkedHashMap<>();
-        for (CounterMetric m : metricsFor(etype)) {
-            out.put(m, readCount(etype, eid, m));
+        // Single GETRANGE over the whole CountInt blob, then decode each metric's 8-byte slot
+        // locally. Previously this issued one GETRANGE per metric (5 round-trips for an ARTICLE);
+        // the blob is tiny (≤ 40 bytes for 5 counters, ≤ 128 bytes reserved) so one full read is
+        // strictly cheaper and reduces N Redis round-trips to 1.
+        List<CounterMetric> metrics = metricsFor(etype);
+        if (metrics.isEmpty()) {
+            return Map.of();
+        }
+        byte[] keyBytes = utf8(cntKey(etype, eid));
+        byte[] blob = template.execute((RedisCallback<byte[]>) conn ->
+                conn.stringCommands().getRange(keyBytes, 0, -1));
+        byte[] bytes = blob == null ? new byte[0] : blob;
+        Map<CounterMetric, Long> out = new LinkedHashMap<>(metrics.size());
+        for (CounterMetric m : metrics) {
+            out.put(m, CountIntCodec.decodeLong(bytes, CountSchema.offset(etype, m)));
         }
         return out;
     }
@@ -257,17 +266,12 @@ public class RedisCounterStore implements CounterStore {
         template.execute(incrScript, keys, argv);
     }
 
-    /** The metrics that have a defined offset for this entity type. */
+    /**
+     * The metrics that have a defined offset for this entity type. Delegates to the cached
+     * {@link CountSchema#metricsFor(CounterEntityType)} (computed once at class load) so the hot
+     * read/flush path no longer iterates the enum with exception-as-control-flow on every call.
+     */
     private static List<CounterMetric> metricsFor(CounterEntityType etype) {
-        List<CounterMetric> list = new ArrayList<>();
-        for (CounterMetric m : CounterMetric.values()) {
-            try {
-                CountSchema.offset(etype, m);
-                list.add(m);
-            } catch (IllegalArgumentException ignored) {
-                // metric has no slot for this etype
-            }
-        }
-        return list;
+        return CountSchema.metricsFor(etype);
     }
 }
