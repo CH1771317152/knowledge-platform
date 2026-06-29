@@ -9,6 +9,7 @@ Java 17（运行时 21）/ Spring Boot 3.3.5 / Spring Security 6 / MyBatis
 MySQL 8.4（Docker :3307）/ Redis 7.4（Docker :6379）/ Caffeine
 Kafka 3.8.0 KRaft / Canal v1.1.8（binlog→Kafka）/ Flyway（V1–V4）
 Aliyun OSS SDK 3.18.1 / JJWT 0.12.6（HS256）/ BCrypt
+k6 v2.0.0（HTTP 压测，已加入系统 PATH）
 
 ## 模块架构
 
@@ -46,8 +47,15 @@ cd backend/deploy && docker compose up -d mysql redis kafka kafka-init canal
 ./mvnw.cmd test '-Dspring.profiles.active=test'                          # 单元（无外部依赖）
 ./mvnw.cmd verify '-Pintegration' '-Dspring.profiles.active=integration' # 集成（需 MySQL+Redis）
 ./mvnw.cmd clean verify '-Pintegration' '-Dspring.profiles.active=integration'  # 全量
-./mvnw.cmd spring-boot:run '-Dspring-boot.run.profiles=integration'      # 启动
+./mvnw.cmd spring-boot:run '-Dspring-boot.run.profiles=local'            # 启动（完整运行时）
+# 压测（k6 v2.0.0；前置：后端已起在 http://localhost:8080）
+k6 run backend/scripts/k6/login.js                                # 运行单个脚本
+k6 run --vus 50 --duration 30s backend/scripts/k6/login.js        # 并发用户数 + 持续时长
+k6 run --summary-export=report.json backend/scripts/k6/login.js   # 导出结果 JSON
 ```
+
+- k6 脚本约定放 `backend/scripts/k6/`（ES module `.js`）。v2 已移除 `--no-summary`（改用 `--summary-mode=disabled`）、`k6 login` 等旧命令——照抄老教程前先替换。
+- 压测目标：permitAll 端点（`/api/auth/login`、`/api/feed/public`、`/api/posts`…）可直接打；authenticated 端点需脚本内先登录取 JWT。
 
 ## 项目级约束（所有开发必须遵守）
 
@@ -61,13 +69,19 @@ test profile 排除了 DataSource / Redis / Kafka 自动配置。
 | `@KafkaListener` / `@Scheduled` | `!test & !integration` |
 | OSS 真实适配器 | `!test & (!integration \| aliyun-oss-smoke)` |
 
+**Profile 用途对照：**
+- `test` → 单元测试（无外部依赖）
+- `integration` → 集成测试（连 MySQL+Redis，但不启动 Kafka 消费者/调度器——测试隔离）
+- `local` → **本地运行**（连全部基础设施 + 启动全部消费者/调度器，配置在 `application-local.yml`）
+- 启动命令用 `profiles=local`（**不是** `integration`，否则所有 Kafka 消费者和定时任务不加载）
+
 任何新 bean 如果依赖 DataSource/Redis/Kafka，必须加对应 `@Profile`，否则 test profile 下 contextLoads 崩溃。单元测试直接构造（fake），不依赖 Spring 注入。
 
 后端按照"Controler->Service->Repository"分层
 
 ### 2. Flyway 迁移不可修改
 
-已应用的迁移文件**不可修改**（Flyway checksum 验证）。新表/改表 → 新建 `V{n}__name.sql`。当前版本：V1→V2→V3→V4。
+已应用的迁移文件**不可修改**（Flyway checksum 验证）。新表/改表 → 新建 `V{n}__name.sql`。当前版本：V1→V2→V3→V4→V5。
 
 ### 3. 分页用 cursor（keyset），不用 offset
 
@@ -91,6 +105,7 @@ Java record 无 setter → 用 `@ConstructorArgs`/`@Arg`（非 `@Results`/`@Resu
 - Git SSH 端口 22 在中国被墙，`~/.ssh/config` 已配 `github.com → ssh.github.com:443`
 - SSH key 已去密码；推送偶发 reset → 重试即可
 - PowerShell 的 `$env:` 不传给 Git Bash——凭据放 `~/.bashrc` 或 `setx`
+- k6 装在 `C:\Program Files\k6\`（系统 PATH）
 
 ## API 路由
 
@@ -118,4 +133,4 @@ skel:{pageKey}                                  lock:{key}
 
 ## 测试基线
 
-236 单元 + 62 集成，1 skip（OSS smoke 环境变量门控）。集成测试需 `docker compose up -d mysql redis`。
+278 单元 + 62 集成，1 skip（OSS smoke 环境变量门控）。集成测试需 `docker compose up -d mysql redis`。
