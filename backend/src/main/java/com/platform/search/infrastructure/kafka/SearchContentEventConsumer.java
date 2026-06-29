@@ -6,6 +6,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.platform.search.application.SearchPostDocumentBuilder;
 import com.platform.search.config.SearchProperties;
 import com.platform.search.infrastructure.elasticsearch.SearchPostIndexRepository;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.context.annotation.Profile;
 import org.springframework.kafka.annotation.KafkaListener;
 import org.springframework.kafka.core.KafkaTemplate;
@@ -37,9 +38,12 @@ import org.springframework.stereotype.Component;
  *
  * <p><b>Profile:</b> {@code @Profile("!test & !integration")} mirrors the other Kafka listeners —
  * neither the unit nor the integration profile wires a live broker, so the listener must not start.
+ * Additionally gated on {@code platform.search.enabled=true} so the consumer only activates when
+ * Elasticsearch is configured.
  */
 @Component
 @Profile("!test & !integration")
+@ConditionalOnProperty(prefix = "platform.search", name = "enabled", havingValue = "true")
 public class SearchContentEventConsumer {
 
     private final ObjectMapper objectMapper;

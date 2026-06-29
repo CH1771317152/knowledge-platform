@@ -24,8 +24,11 @@ dist/
 tmp/
 backend/tmp/
 
-# canal runtime logs (server output)
-deploy/canal/logs/
+# canal runtime logs (server output); repo path is backend/deploy/...
+backend/deploy/canal/logs/
+
+# load-test credentials: local test users with passwords + JWT tokens
+backend/scripts/loadtest/testuser.md
 
 # claude local override (shared settings.json is committed)
 .claude/settings.local.json

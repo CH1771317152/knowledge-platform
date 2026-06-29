@@ -1,6 +1,11 @@
 server:
   port: 8080
 
+management:
+  health:
+    elasticsearch:
+      enabled: false
+
 spring:
   application:
     name: knowledge-platform
@@ -106,7 +111,7 @@ platform:
       code-length: ${AUTH_VERIFICATION_CODE_LENGTH:6}
     sender:
       mode: ${AUTH_VERIFICATION_SENDER_MODE:logging}
-      expose-code-in-logs: ${AUTH_VERIFICATION_EXPOSE_CODE_IN_LOGS:false}
+      expose-code-in-logs: ${AUTH_VERIFICATION_EXPOSE_CODE_IN_LOGS:true}
   relation:
     kafka:
       events-topic: ${RELATION_EVENTS_TOPIC:relation-events}
